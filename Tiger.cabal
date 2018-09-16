@@ -26,9 +26,8 @@ source-repository head
 
 library
   exposed-modules:
-      Lib
-    , TigerType
-    , TigerParser
+      TigerParser
+    , AbstractSyntax
   other-modules:
       Paths_Tiger
   hs-source-dirs:
