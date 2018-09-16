@@ -5,6 +5,7 @@
 
 module Semantic.Analysis where
 
+import TigerParser
 import qualified ProgramTypes         as PT
 import qualified AbstractSyntax       as Absyn
 import qualified Semantic.Environment as Env
@@ -110,7 +111,7 @@ transExp' inLoop (Absyn.For var from to body pos) = do
   Trans {tm = tm, em = em} <- get
   checkInt from' pos
   checkInt to' pos
-  body' <- locallyInsert1 (transExp' True body)
+  body' <- locallyInsert1 (transExp' True body) -- could replace with a get and put, we if we don't mutate
                           (var, Env.VarEntry {Env.ty = PT.INT, Env.modifiable = False})
   checkNil body' pos -- the false makes it so if we try to modify it, it errors
   return (Expty {expr = (), typ = typ body'})
@@ -138,7 +139,7 @@ transExp' inLoop (Absyn.Funcall fnSym args pos) = do
     Just (Env.FunEntry {Env.formals = formals, Env.result = result}) -> do
       zipWithM_ (\arg formal -> do
                     Expty {typ = argType} <- transExp' inLoop arg
-                    checkSameTyp formal argType pos)
+                    checkSameTyp (actualType formal) (actualType argType) pos)
                 args
                 formals
       return (Expty {expr = (), typ = result})
@@ -182,16 +183,17 @@ transExp' inLoop (Absyn.RecCreate tyid givens pos) = do
       return (Expty {expr = (), typ = PT.RECORD syms uniqueType})
     Just x -> throwError (show pos <> " " <> S.unintern tyid
                          <> " is not of type record, but of type " <> show x)
--- fix this case... should pop the changes made by transDec
 -- and this case should be able to handle mutally recursive functions
 -- do this by filtering out TypeDec for add TypeDec
--- and grab the rest by doing the opposite filter, and then just call traverse endVal!
 transExp' inLoop (Absyn.Let decs exps pos) = do
---  let typeDec
+  currentEnv <- get
   traverse transDec decs
   case exps of
     []   -> return (Expty {expr = (), typ = PT.NIL})
-    exps -> last <$> traverse (transExp' inLoop) exps
+    exps -> do
+      expsTyped <- traverse (transExp' inLoop) exps
+      put currentEnv
+      return (last expsTyped)
 
 transVar :: MonadTran m => Absyn.Var -> m VarTy
 transVar (Absyn.SimpleVar sym pos) = do
@@ -241,6 +243,10 @@ transTy :: Env.EntryMap -> Absyn.Ty -> PT.Type
 transTy = undefined
 
 -- Helper functions----------------------------------------------------------------------------
+
+-- probably not actually needed, if we don't mutate types at all... is only really relevant
+-- when we start interpreting code... so if that doesn't happen at this pass, replace with
+-- 
 -- adds a symbol to the envEntry replacing what is there for this scope
 locallyInsert1 :: MonadTran m => m b -> (S.Symbol, Env.Entry) -> m b
 locallyInsert1 expression (symb, envEntry) = do
@@ -342,8 +348,14 @@ checkSame (Expty {typ = x}) (Expty {typ = y}) = checkSameTyp x y
 
 -- A variant of checkSame that works on PT.Type
 checkSameTyp :: (MonadTranErr m, Show a) => PT.Type -> PT.Type -> a -> m ()
+checkSameTyp (PT.RECORD _ xid) (PT.RECORD _ yid) pos
+  | xid == yid = return ()
+  | otherwise  = throwError (show pos <> " records are of different type")
+checkSameTyp (PT.ARRAY _ xid) (PT.ARRAY _ yid) pos
+  | xid == yid = return ()
+  | otherwise  = throwError (show pos <> " arrays are of different type")
 checkSameTyp x y pos
-  | x == y    = return ()
+  |  x == y   = return ()
   | otherwise = throwError (show pos <> " given a " <> show x <> " needs to be the same type as " <> show y)
 
 isTypeDeclaration :: Absyn.Dec -> Bool
@@ -355,4 +367,3 @@ isTypeDeclaration _                     = False
 actualType :: PT.Type -> PT.Type
 actualType (PT.NAME sym (Just typ)) = actualType typ
 actualType typ                      = typ
-
