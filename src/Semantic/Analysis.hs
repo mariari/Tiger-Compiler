@@ -239,14 +239,31 @@ transVar (Absyn.FieldVar recordType field pos) = do
 transDec :: MonadTran m => Absyn.Dec -> m ()
 transDec = undefined
 
-transTy :: Env.EntryMap -> Absyn.Ty -> PT.Type
-transTy = undefined
+transTy :: MonadTran  m => Absyn.Ty -> m PT.Type
+transTy (Absyn.NameTy sym pos) = do
+  Trans {tm = typeMap} <- get
+  return (PT.NAME sym (typeMap Map.!? sym))
+transTy (Absyn.ArrayTy sym pos) = do
+  Trans {tm = typeMap} <- get
+  case typeMap Map.!? sym of
+    Nothing  -> throwError (show pos <> " type " <> S.unintern sym <> " is not defined")
+    Just typ -> do
+      uniqueNum <- fresh
+      return (PT.ARRAY typ uniqueNum)
+transTy (Absyn.RecordTy recs) = do
+  Trans {tm = typeMap} <- get
+  symMap <- traverse (\ (Absyn.FieldDec name typ pos) ->
+                        case typeMap Map.!? typ of
+                          Nothing -> throwError (show pos <> " type " <> S.unintern typ <> " is not defined")
+                          Just ty -> return (name, ty)
+                     ) recs
+  uniqueNum <- fresh
+  return (PT.RECORD symMap uniqueNum)
 
 -- Helper functions----------------------------------------------------------------------------
 
 -- probably not actually needed, if we don't mutate types at all... is only really relevant
 -- when we start interpreting code... so if that doesn't happen at this pass, replace with
--- 
 -- adds a symbol to the envEntry replacing what is there for this scope
 locallyInsert1 :: MonadTran m => m b -> (S.Symbol, Env.Entry) -> m b
 locallyInsert1 expression (symb, envEntry) = do
