@@ -5,6 +5,7 @@
 
 module Semantic.Analysis where
 
+import Debug.Trace
 import TigerParser
 import qualified ProgramTypes         as PT
 import qualified AbstractSyntax       as Absyn
@@ -183,11 +184,10 @@ transExp' inLoop (Absyn.RecCreate tyid givens pos) = do
       return (Expty {expr = (), typ = PT.RECORD syms uniqueType})
     Just x -> throwError (show pos <> " " <> S.unintern tyid
                          <> " is not of type record, but of type " <> show x)
--- and this case should be able to handle mutally recursive functions
--- do this by filtering out TypeDec for add TypeDec
+
 transExp' inLoop (Absyn.Let decs exps pos) = do
   currentEnv <- get
-  traverse transDec decs
+  transDec decs pos
   case exps of
     []   -> return (Expty {expr = (), typ = PT.NIL})
     exps -> do
@@ -236,31 +236,138 @@ transVar (Absyn.FieldVar recordType field pos) = do
                                           , modifiable = modifiable}
                      , expr = expr }
 
-transDec :: MonadTran m => Absyn.Dec -> m ()
-transDec = undefined
-
-transTy :: MonadTran  m => Absyn.Ty -> m PT.Type
-transTy (Absyn.NameTy sym pos) = do
+-- the S.Symbol is for records only that will generate a self type
+transTy :: MonadTran m => S.Symbol -> Absyn.Ty -> m PT.Type
+transTy _ (Absyn.NameTy sym pos) = do
   Trans {tm = typeMap} <- get
   return (PT.NAME sym (typeMap Map.!? sym))
-transTy (Absyn.ArrayTy sym pos) = do
+transTy _ (Absyn.ArrayTy sym pos) = do
   Trans {tm = typeMap} <- get
   case typeMap Map.!? sym of
-    Nothing  -> throwError (show pos <> " type " <> S.unintern sym <> " is not defined")
-    Just typ -> do
+    Nothing  -> do
       uniqueNum <- fresh
-      return (PT.ARRAY typ uniqueNum)
-transTy (Absyn.RecordTy recs) = do
+      return (PT.ARRAY (PT.NAME sym Nothing) uniqueNum)
+    Just typ ->
+      case actualType typ of
+        PT.ARRAY _ num -> return (PT.ARRAY typ num)
+        _              -> PT.ARRAY typ <$> fresh
+transTy self (Absyn.RecordTy recs) = do
   Trans {tm = typeMap} <- get
-  symMap <- traverse (\ (Absyn.FieldDec name typ pos) ->
-                        case typeMap Map.!? typ of
-                          Nothing -> throwError (show pos <> " type " <> S.unintern typ <> " is not defined")
-                          Just ty -> return (name, ty)
-                     ) recs
   uniqueNum <- fresh
+  let symMap = (\ (Absyn.FieldDec name typ pos) ->
+                   case typeMap Map.!? typ of
+                     Just ty -> (name, ty)
+                     Nothing -> (name, if self == typ
+                                       then PT.SELF self uniqueNum
+                                       else PT.NAME typ Nothing))
+               <$> recs
+
   return (PT.RECORD symMap uniqueNum)
 
+
+transDec :: MonadTran m => [Absyn.Dec] -> Absyn.Pos -> m ()
+transDec decs pos = handleTypes typeDecs pos
+  where
+    typeDecs = filter isTypeDec     decs
+    funDecs  = filter isFunctionDec decs
+    varDecs  = filter isVarDec      decs
+
+
+type NumberMissing = Int
+
+-- would be nicer with IOrefs and mutation...
+-- works on all types currently outside degenarate case of type list = {first : int, rest : b} type b = list
+-- PRE-REQUIREMENT : Everything Dec must be a type, or else this will error!
+-- PRECONDITION : Never put a type with a Nothing in the state!
+handleTypes :: MonadTran m => [Absyn.Dec] -> Absyn.Pos -> m ()
+handleTypes decs pos = do
+  let solve (dependencyLeftMap, conMap) (Absyn.TypeDec sym typ pos) = do
+        ty <- transTy sym typ
+        trans@(Trans {tm = typeMap}) <- get
+        case ty of
+          n@(PT.NAME nm Nothing)              -> return (dependencyLeftMap, consOntoLookup nm (sym, n, 1) conMap)
+          a@(PT.ARRAY (PT.NAME nm Nothing) _) -> return (dependencyLeftMap, consOntoLookup nm (sym, a, 1) conMap)
+          r@(PT.RECORD xs uniqueNum) ->
+            case foldr f [] xs of
+              [] -> do
+                put (trans { tm = Map.insert sym ty typeMap })
+                freeDepsOn sym ty dependencyLeftMap conMap
+              xs ->
+                return ( Map.insert sym (length xs, r) dependencyLeftMap
+                       , foldr (\(_,PT.NAME key _) -> consOntoLookup key (sym, r, length xs)) conMap xs )
+          fullyRealizedType -> do
+            put (trans { tm = Map.insert sym ty typeMap })
+            freeDepsOn sym ty dependencyLeftMap conMap
+      solve _ _ = throwError "Precondition violated for handleType"
+
+  (_, constraintMap) <- foldM solve (mempty, mempty) decs
+  unless (Map.null constraintMap) $ do
+    -- add removePartial for the one degenarate case of type list = {first : int, rest : b} type b = list
+    (throwError (show pos <> " was unable to satisfy all constraints specifically " <> show constraintMap))
+  where
+    f x@(_, PT.NAME _ Nothing) xs = x : xs
+    f _                        xs = xs
+
+-- frees the dependencies on sym with the type ty
+freeDepsOn :: MonadTran m
+           => S.Symbol
+           -> PT.Type
+           -> Map.Map S.Symbol (NumberMissing, PT.Type)
+           -> Map.Map S.Symbol [(S.Symbol, PT.Type, NumberMissing)]
+           -> m (Map.Map S.Symbol (Int, PT.Type), Map.Map S.Symbol [(S.Symbol, PT.Type, NumberMissing)])
+freeDepsOn sym ty dependencyLeftMap conMap =
+  case conMap Map.!? sym of
+    Nothing      -> return (dependencyLeftMap, Map.delete sym conMap)
+    Just conSyms -> resolveDepsOn sym ty dependencyLeftMap conMap conSyms
+
+
+resolveDepsOn sym ty dmap cmap conSyms = do
+  (d,c) <- foldM (\ (depLeftMap, conMap) (conSym, typ, num) ->
+                   let f = do
+                         let realizedType = handleNothingType sym ty typ
+                         trans@(Trans { tm }) <- get
+                         put (trans {tm = Map.insert conSym realizedType tm})
+                         freeDepsOn conSym realizedType depLeftMap conMap
+                       blah | num == 1 || depsLeft == 1 = f
+                            | otherwise = return ( Map.insert conSym
+                                                             ( depsLeft - 1
+                                                             , handleNothingType sym ty updatedType )
+                                                             depLeftMap
+                                                 , conMap)
+                         where (depsLeft, updatedType) = depLeftMap Map.! conSym
+                   in blah)
+           (dmap, cmap) conSyms
+  return (d, Map.delete sym c)
+
+-- a slow algorithm that puts partial data on the typeMap, and tries to resolve the dependencies 1 by 1
+resolvePartial = undefined
+
+
+-- handles the Nothing type by giving a value, and a symbol that does sanity checks
+-- in case we get a record, where there could be many Nothings
+handleNothingType sym typeValue (PT.NAME nm Nothing) =
+  PT.NAME nm (Just typeValue)
+
+handleNothingType sym typeValue (PT.ARRAY (PT.NAME nm Nothing) uniqueType) =
+  case actualType typeValue of
+    PT.ARRAY _ arryValue -> PT.ARRAY (PT.NAME nm (Just typeValue)) arryValue
+    _                    -> PT.ARRAY (PT.NAME nm (Just typeValue)) uniqueType
+
+handleNothingType sym typeValue (PT.RECORD xs uniqueNum) = PT.RECORD (fmap f xs) uniqueNum
+  where
+    f (recName, PT.NAME recSym Nothing) | recSym == sym = (recName, PT.NAME recSym (Just typeValue))
+    f (recName, typ)                                    = (recName, typ)
+
+handleNothingType _ _ typ = typ
+
+
 -- Helper functions----------------------------------------------------------------------------
+
+-- adds a value onto a list of values in a map
+consOntoLookup :: Ord k => k -> a -> Map.Map k [a] -> Map.Map k [a]
+consOntoLookup lookup value = Map.alter f lookup
+  where f Nothing   = Just [value]
+        f (Just xs) = Just (value : xs)
 
 -- probably not actually needed, if we don't mutate types at all... is only really relevant
 -- when we start interpreting code... so if that doesn't happen at this pass, replace with
@@ -275,20 +382,6 @@ locallyInsert1 expression (symb, envEntry) = do
 
   changeEnvValue symb val
 
-  return expResult
-
--- could just be foldr locallyInsert1... however I don't trust my reasoning enough to do that
--- adds symbols to the envEntry replacing what is there for this scope
-locallyInsert :: MonadTran m => m b -> [(S.Symbol, Env.Entry)] -> m b
-locallyInsert expression xs = do
-  Trans {tm = typeMap, em = envMap} <- get
-  let vals = fmap (\(symb,_) -> (symb, envMap Map.!? symb)) xs
-
-  traverse (\(symb, envEntry) -> changeEnvValue symb (Just envEntry)) xs
-
-  expResult <- expression
-
-  traverse (uncurry changeEnvValue) vals
   return expResult
 
 -- Changes the Environment value... removing a value if there is none, else places the new value in the map
@@ -362,12 +455,15 @@ checkStrInt (Expty {typ = _})         pos = throwError (show pos <> " integer or
 checkSame :: (MonadTranErr m, Show a) => Expty -> Expty -> a -> m ()
 checkSame (Expty {typ = x}) (Expty {typ = y}) = checkSameTyp x y
 
-
 -- A variant of checkSame that works on PT.Type
 checkSameTyp :: (MonadTranErr m, Show a) => PT.Type -> PT.Type -> a -> m ()
 checkSameTyp (PT.RECORD _ xid) (PT.RECORD _ yid) pos
   | xid == yid = return ()
   | otherwise  = throwError (show pos <> " records are of different type")
+checkSameTyp (PT.RECORD _ xid) (PT.SELF _ yid) pos
+  | xid == yid = return ()
+  | otherwise  = throwError (show pos <> " records are of different type")
+checkSameTyp (PT.RECORD _ xid) nil pos = return ()
 checkSameTyp (PT.ARRAY _ xid) (PT.ARRAY _ yid) pos
   | xid == yid = return ()
   | otherwise  = throwError (show pos <> " arrays are of different type")
@@ -375,9 +471,15 @@ checkSameTyp x y pos
   |  x == y   = return ()
   | otherwise = throwError (show pos <> " given a " <> show x <> " needs to be the same type as " <> show y)
 
-isTypeDeclaration :: Absyn.Dec -> Bool
-isTypeDeclaration (Absyn.TypeDec _ _ _) = True
-isTypeDeclaration _                     = False
+isTypeDec :: Absyn.Dec -> Bool
+isTypeDec (Absyn.TypeDec {}) = True
+isTypeDec _                     = False
+
+isFunctionDec (Absyn.FunDec {}) = True
+isFunctionDec _                 = False
+
+isVarDec (Absyn.VarDec {}) = True
+isVarDec _                 = False
 
 -- goes through the name lookup and gives back the actual type
 -- will give back a name only if it doesn't point to anything.

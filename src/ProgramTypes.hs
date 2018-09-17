@@ -11,8 +11,13 @@ data Type = INT
           | ARRAY Type !Unique
           | NIL
           | UNIT
+          | SELF !Symbol !Unique       -- my personal hack for self referential types
           | NAME !Symbol !(Maybe Type) -- was a ty option ref in the book
           deriving (Show,Eq)
 
 
 type SymMap a = Map.Map Symbol a
+
+data Test = Test Int B
+
+type B = Test
