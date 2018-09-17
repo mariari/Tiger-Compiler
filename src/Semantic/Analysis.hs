@@ -247,31 +247,31 @@ transVar (Absyn.FieldVar recordType field pos) = do
 
 -- the S.Symbol is for records only that will generate a self type
 transTy :: MonadTran m => RefMap -> Absyn.Ty -> m (PT.Type, RefMap)
-transTy = undefined
--- transTy _ (Absyn.NameTy sym pos) = do
---   Trans {tm = typeMap} <- get
---   return (PT.NAME sym (typeMap Map.!? sym))
--- transTy _ (Absyn.ArrayTy sym pos) = do
---   Trans {tm = typeMap} <- get
---   case typeMap Map.!? sym of
---     Nothing  -> do
---       uniqueNum <- fresh
---       return (PT.ARRAY (PT.NAME sym Nothing) uniqueNum)
---     Just typ ->
---       case actualType typ of
---         PT.ARRAY _ num -> return (PT.ARRAY typ num)
---         _              -> PT.ARRAY typ <$> fresh
--- transTy self (Absyn.RecordTy recs) = do
---   Trans {tm = typeMap} <- get
---   uniqueNum <- fresh
---   let symMap = (\ (Absyn.FieldDec name typ pos) ->
---                    case typeMap Map.!? typ of
---                      Just ty -> (name, ty)
---                      Nothing -> (name, PT.NAME typ Nothing))
---                <$> recs
-
---   return (PT.RECORD symMap uniqueNum)
-
+transTy refMap (Absyn.NameTy sym pos) = do
+  (refType, refMap) <- getOrCreateRefMap refMap sym
+  return (PT.NAME sym refType, refMap)
+transTy refMap (Absyn.ArrayTy sym pos) = do
+  (refType, refMap) <- getOrCreateRefMap refMap sym
+  mtyp <- liftIO (Ref.readIORef refType)
+  case mtyp of
+    Nothing -> do
+      uniqueNum <- fresh
+      return ((PT.ARRAY (PT.NAME sym refType) uniqueNum), refMap)
+    Just typ -> do
+      actualTy <- liftIO (actualType typ)
+      case actualTy of
+        PT.ARRAY _ num -> return (PT.ARRAY typ num, refMap)
+        _              -> (\f -> (PT.ARRAY typ f, refMap)) <$> fresh
+transTy refMap (Absyn.RecordTy recs) = do
+  (xs,refMap) <- foldM (\ (xs, refMap) (Absyn.FieldDec name tySym pos) -> do
+                          (refType, refMap) <- getOrCreateRefMap refMap tySym
+                          refValue          <- liftIO (Ref.readIORef refType)
+                          case refValue of
+                            Nothing  -> return ((name, PT.NAME tySym refType) : xs, refMap)
+                            Just val -> return ((name, val) : xs, refMap))
+                       ([], refMap) recs
+  unique <- fresh
+  return (PT.RECORD (reverse xs) unique, refMap)
 
 transDec :: MonadTran m => [Absyn.Dec] -> Absyn.Pos -> m ()
 transDec decs pos = undefined
@@ -313,6 +313,15 @@ insertType sym tp = do
   put (trans {tm = Map.insert sym tp typeMap})
 
 -- Helper functions----------------------------------------------------------------------------
+
+getOrCreateRefMap :: MonadTran m => RefMap -> S.Symbol -> m (Ref.IORef (Maybe PT.Type), RefMap)
+getOrCreateRefMap refMap sym =
+  case refMap Map.!? sym of
+    Nothing -> do
+      Trans {tm = typeMap} <- get
+      newRef <- liftIO (Ref.newIORef (typeMap Map.!? sym))
+      return (newRef, Map.insert sym newRef refMap)
+    Just ref -> return (ref, refMap)
 
 -- probably not actually needed, if we don't mutate types at all... is only really relevant
 -- when we start interpreting code... so if that doesn't happen at this pass, replace with
