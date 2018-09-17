@@ -1,9 +1,13 @@
 module ProgramTypes where
 
 import           Data.Symbol
+import           Data.IORef
 import qualified Data.Map.Strict as Map -- we use Map as we need ordering on the symbols
 
 type Unique = Int
+
+instance Show (IORef a) where
+  show _ = "IOREF"
 
 data Type = INT
           | STRING
@@ -11,13 +15,8 @@ data Type = INT
           | ARRAY Type !Unique
           | NIL
           | UNIT
-          | SELF !Symbol !Unique       -- my personal hack for self referential types
-          | NAME !Symbol !(Maybe Type) -- was a ty option ref in the book
+          | NAME !Symbol (IORef (Maybe Type)) -- no way to solve cyclic dependencies without a ref
           deriving (Show,Eq)
 
 
 type SymMap a = Map.Map Symbol a
-
-data Test = Test Int B
-
-type B = Test
