@@ -24,6 +24,8 @@ import           Control.Monad.Except
 -- will be expanded upon in chapter 7
 type TranslateExp = ()
 
+type RefMap = Map.Map S.Symbol (Ref.IORef (Maybe PT.Type))
+
 data Expty = Expty { expr :: !TranslateExp
                    , typ  :: !PT.Type
                    } deriving Show
@@ -58,7 +60,7 @@ runMonadTran :: Env.TypeMap
              -> Env.EntryMap
              -> (StateT Translation (ExceptT e IO)) a
              -> IO (Either e (a, Translation))
-runMonadTran tm em f = runExceptT (runStateT f trans) -- turn back to runExcept once Unique gets up
+runMonadTran tm em f = runExceptT (runStateT f trans)
   where trans = Trans {tm = tm, em = em, uniq = 0}
 
 transExp :: Env.TypeMap -> Env.EntryMap -> Absyn.Exp -> IO Expty
@@ -161,7 +163,7 @@ transExp' inLoop (Absyn.ArrCreate tyid length content pos) = do
   lengthExp            <- transExp' inLoop length
   checkInt lengthExp pos
   arrType <- liftIO $ traverse actualType (typeMap Map.!? tyid)
-  case arrType of -- actualType <$> should be removed if we never get a NAME back
+  case arrType of
     Nothing -> throwError (show pos <> " array type " <> S.unintern tyid <> " undefined")
     Just (PT.ARRAY typ uniqueId) -> do
       Expty {typ = contentType} <- transExp' inLoop content
@@ -173,15 +175,15 @@ transExp' inLoop (Absyn.ArrCreate tyid length content pos) = do
 transExp' inLoop (Absyn.RecCreate tyid givens pos) = do
   Trans {tm = typeMap} <- get
   recType <- liftIO $ traverse actualType (typeMap Map.!? tyid)
-  case recType of -- actualType <$> should be removed if we never get a NAME back
+  case recType of
     Nothing -> throwError (show pos <> " record " <> S.unintern tyid <> " undefined")
     Just (PT.RECORD syms uniqueType) -> do
       let sortedRecType = List.sortOn fst syms -- with these two sorted, we can just compare
           sortedGivens  = List.sortOn Absyn.fieldTyp givens -- and error from there
       sortedGivenTypes <- traverse (\ (Absyn.Field sym exp pos) -> do
                                        Expty {typ = exType} <- transExp' inLoop exp
-                                       return (sym, exType, pos)
-                                   ) sortedGivens
+                                       return (sym, exType, pos))
+                                   sortedGivens
       zipWithM_ (\ (_, recType)
                    (_, givenType, p) -> checkSameTyp recType givenType p)
                 sortedRecType
@@ -244,7 +246,7 @@ transVar (Absyn.FieldVar recordType field pos) = do
                      , expr = expr }
 
 -- the S.Symbol is for records only that will generate a self type
-transTy :: MonadTran m => S.Symbol -> Absyn.Ty -> m PT.Type
+transTy :: MonadTran m => RefMap -> Absyn.Ty -> m (PT.Type, RefMap)
 transTy = undefined
 -- transTy _ (Absyn.NameTy sym pos) = do
 --   Trans {tm = typeMap} <- get
@@ -277,6 +279,38 @@ transDec decs pos = undefined
     typeDecs = filter isTypeDec     decs
     funDecs  = filter isFunctionDec decs
     varDecs  = filter isVarDec      decs
+
+transTypeDecs :: MonadTran m => [Absyn.Dec] -> Absyn.Pos -> m ()
+transTypeDecs decs pos = foldM handle1 refMap decs >> handleCycles decs pos
+  where
+    refMap :: Map.Map S.Symbol (Ref.IORef (Maybe PT.Type))
+    refMap = mempty
+    handle1 refMap (Absyn.TypeDec sym ty pos) =
+      case refMap Map.!? sym of
+        Just ref  -> do
+          mty <- liftIO (Ref.readIORef ref)
+          case mty of
+            Just _  -> throwError (show pos <> " multiple type declarations of " <> show sym)
+            Nothing -> writeWithRef ref sym ty refMap
+        Nothing -> do
+          symRef           <- liftIO (Ref.newIORef Nothing)
+          writeWithRef symRef sym ty refMap
+    handle1 refMap _ = throwError (show pos <> " precondition defied, a non-type was sent to transTypeDecs")
+
+writeWithRef :: MonadTran m => Ref.IORef (Maybe PT.Type) -> S.Symbol -> Absyn.Ty -> RefMap -> m RefMap
+writeWithRef symRef sym ty refMap = do
+  (tType, nRefMap) <- transTy (Map.insert sym symRef refMap) ty
+  liftIO (Ref.writeIORef symRef (Just tType))
+  insertType sym tType
+  return nRefMap
+
+handleCycles :: MonadTran m => [Absyn.Dec] -> Absyn.Pos -> m ()
+handleCycles = undefined
+
+insertType :: MonadTran m => S.Symbol -> PT.Type -> m ()
+insertType sym tp = do
+  trans@(Trans {tm = typeMap}) <- get
+  put (trans {tm = Map.insert sym tp typeMap})
 
 -- Helper functions----------------------------------------------------------------------------
 
