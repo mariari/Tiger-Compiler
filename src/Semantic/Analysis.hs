@@ -273,11 +273,25 @@ transTy refMap (Absyn.RecordTy recs) = do
   return (PT.RECORD (reverse xs) unique, refMap)
 
 transDec :: MonadTran m => [Absyn.Dec] -> Absyn.Pos -> m ()
-transDec decs pos = transTypeDecs typeDecs pos
+transDec decs pos = transTypeDecs typeDecs pos >> transVarDecs varDecs pos >> return ()
   where
     typeDecs = filter isTypeDec     decs
     funDecs  = filter isFunctionDec decs
     varDecs  = filter isVarDec      decs
+
+transVarDecs decs pos = traverse f decs
+  where
+    f (Absyn.VarDec sym mType exp _) = do
+      Expty {typ}        <- transExp' False exp
+      trans@(Trans {em, tm}) <- get
+      let newMap = put (trans { em = Map.insert sym (Env.VarEntry {ty = typ, modifiable = True}) em })
+      case mType of
+        Nothing  -> newMap
+        Just sty -> case tm Map.!? sty of
+                     Nothing -> throwError (show pos <> " type " <> S.unintern sty <> " is not defined ")
+                     Just x | x == typ -> newMap
+                     Just x -> throwError (show pos <> " " <> show typ <> " is not " <> show x )
+    f _ = throwError (show pos <> " violated precondition ")
 
 transTypeDecs :: MonadTran m => [Absyn.Dec] -> Absyn.Pos -> m ()
 transTypeDecs decs pos = foldM handle1 refMap decs >>= allDefined >> handleCycles decs pos
@@ -310,20 +324,19 @@ writeWithRef symRef sym ty refMap = do
   return nRefMap
 
 handleCycles :: MonadTran m => [Absyn.Dec] -> Absyn.Pos -> m ()
-handleCycles decs pos = do
-  Trans {tm} <- get
-  foldM (recurse tm Set.empty) varSet varSet >> return ()
+handleCycles decs pos = foldM (recurse Set.empty) varSet varSet >> return ()
   where
     varSet = foldr f mempty decs
     f (Absyn.TypeDec s (Absyn.NameTy {}) _) set = Set.insert s set
     f _                                     set = set
-    recurse tm seen set x
+    recurse seen set x
       | Set.member x seen = throwError (show pos <> " cycle detected " <> show seen <> " is in a cycle")
-      | otherwise         = case Map.lookup x tm of
-                              Just (PT.NAME v ref) | Set.member v set -> do
-                                  mRef <- liftIO (Ref.readIORef ref)
-                                  recurse tm (Set.insert x seen) set v
-                              _ -> return (set Set.\\ seen)
+      | otherwise         = do Trans {tm} <- get
+                               case Map.lookup x tm of
+                                 Just (PT.NAME v ref) | Set.member v set -> do
+                                       mRef <- liftIO (Ref.readIORef ref)
+                                       recurse (Set.insert x seen) set v
+                                 _ -> return (set Set.\\ seen)
 
 insertType :: MonadTran m => S.Symbol -> PT.Type -> m ()
 insertType sym tp = do
