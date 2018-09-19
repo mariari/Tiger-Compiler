@@ -5,17 +5,19 @@
 
 module Semantic.Analysis where
 
-import TigerParser
+import           TigerParser
 import qualified ProgramTypes         as PT
 import qualified AbstractSyntax       as Absyn
 import qualified Semantic.Environment as Env
 
+import           Data.Maybe
 import           Data.Monoid((<>))
 import           Control.Monad
 import qualified Data.IORef      as Ref
 import qualified Data.List       as List
 import qualified Data.Symbol     as S
 import qualified Data.Map.Strict as Map -- we are use ordering in symbols, so we can't use HashMap
+import qualified Data.Set        as Set
 import           Control.Monad.State.Lazy
 import           Control.Monad.Reader
 import           Control.Monad.Except
@@ -245,7 +247,6 @@ transVar (Absyn.FieldVar recordType field pos) = do
                                           , modifiable = modifiable}
                      , expr = expr }
 
--- the S.Symbol is for records only that will generate a self type
 transTy :: MonadTran m => RefMap -> Absyn.Ty -> m (PT.Type, RefMap)
 transTy refMap (Absyn.NameTy sym pos) = do
   (refType, refMap) <- getOrCreateRefMap refMap sym
@@ -266,36 +267,40 @@ transTy refMap (Absyn.RecordTy recs) = do
   (xs,refMap) <- foldM (\ (xs, refMap) (Absyn.FieldDec name tySym pos) -> do
                           (refType, refMap) <- getOrCreateRefMap refMap tySym
                           refValue          <- liftIO (Ref.readIORef refType)
-                          case refValue of
-                            Nothing  -> return ((name, PT.NAME tySym refType) : xs, refMap)
-                            Just val -> return ((name, val) : xs, refMap))
+                          return ((name, fromMaybe (PT.NAME tySym refType) refValue) : xs, refMap))
                        ([], refMap) recs
   unique <- fresh
   return (PT.RECORD (reverse xs) unique, refMap)
 
 transDec :: MonadTran m => [Absyn.Dec] -> Absyn.Pos -> m ()
-transDec decs pos = undefined
+transDec decs pos = transTypeDecs typeDecs pos
   where
     typeDecs = filter isTypeDec     decs
     funDecs  = filter isFunctionDec decs
     varDecs  = filter isVarDec      decs
 
 transTypeDecs :: MonadTran m => [Absyn.Dec] -> Absyn.Pos -> m ()
-transTypeDecs decs pos = foldM handle1 refMap decs >> handleCycles decs pos
+transTypeDecs decs pos = foldM handle1 refMap decs >>= allDefined >> handleCycles decs pos
   where
-    refMap :: Map.Map S.Symbol (Ref.IORef (Maybe PT.Type))
+    refMap :: RefMap
     refMap = mempty
     handle1 refMap (Absyn.TypeDec sym ty pos) =
       case refMap Map.!? sym of
-        Just ref  -> do
+        Just ref -> do
           mty <- liftIO (Ref.readIORef ref)
           case mty of
             Just _  -> throwError (show pos <> " multiple type declarations of " <> show sym)
             Nothing -> writeWithRef ref sym ty refMap
         Nothing -> do
-          symRef           <- liftIO (Ref.newIORef Nothing)
+          symRef <- liftIO (Ref.newIORef Nothing)
           writeWithRef symRef sym ty refMap
-    handle1 refMap _ = throwError (show pos <> " precondition defied, a non-type was sent to transTypeDecs")
+    handle1 refMap _  = throwError (show pos <> " precondition defied, a non-type was sent to transTypeDecs")
+    allDefined refMap = traverse f refMap
+    f ref = do
+      mty <- liftIO (Ref.readIORef ref)
+      case mty of
+        Nothing -> throwError (show pos <> " not all type variables are not defined")
+        Just x  -> return x
 
 writeWithRef :: MonadTran m => Ref.IORef (Maybe PT.Type) -> S.Symbol -> Absyn.Ty -> RefMap -> m RefMap
 writeWithRef symRef sym ty refMap = do
@@ -305,7 +310,20 @@ writeWithRef symRef sym ty refMap = do
   return nRefMap
 
 handleCycles :: MonadTran m => [Absyn.Dec] -> Absyn.Pos -> m ()
-handleCycles = undefined
+handleCycles decs pos = do
+  Trans {tm} <- get
+  foldM (recurse tm Set.empty) varSet varSet >> return ()
+  where
+    varSet = foldr f mempty decs
+    f (Absyn.TypeDec s (Absyn.NameTy {}) _) set = Set.insert s set
+    f _                                     set = set
+    recurse tm seen set x
+      | Set.member x seen = throwError (show pos <> " cycle detected " <> show seen <> " is in a cycle")
+      | otherwise         = case Map.lookup x tm of
+                              Just (PT.NAME v ref) | Set.member v set -> do
+                                  mRef <- liftIO (Ref.readIORef ref)
+                                  recurse tm (Set.insert x seen) set v
+                              _ -> return (set Set.\\ seen)
 
 insertType :: MonadTran m => S.Symbol -> PT.Type -> m ()
 insertType sym tp = do
