@@ -306,7 +306,9 @@ transFunDecsHead decs pos = traverse_ f decs
             Nothing      -> put (trans { em = Map.insert name (Env.FunEntry types PT.UNIT) em})
             Just symType -> case tm Map.!? symType of
                              Nothing -> throwError (show pos <> " type " <> S.unintern symType <> " is undeifned")
-                             Just x  -> put (trans { em = Map.insert name (Env.FunEntry types x) em})
+                             Just x  -> do
+                               actualTy <- liftIO (actualType x)
+                               put (trans { em = Map.insert name (Env.FunEntry types actualTy) em})
         f _ = throwError (show pos <> " internal precondition violated at transFunDecHead")
 
 transFunDecsBody :: (MonadTran m, Traversable t, Show a) => t Absyn.Dec -> a -> m ()
@@ -316,7 +318,14 @@ transFunDecsBody decs pos = traverse_ f decs
           types                  <- traverse (mapFieldDec (\n t -> (n, Env.VarEntry { ty = t
                                                                                     , modifiable = True})))
                                              fields
-          locallyInsert (transExp' False body) types
+
+          Expty {typ} <- locallyInsert (transExp' False body) types
+          bodyType    <- liftIO (actualType typ)
+          case em Map.!? name of
+            Just (Env.FunEntry {result}) -> do
+              trueResultType <- liftIO (actualType result)
+              checkSameTyp trueResultType bodyType pos
+            _ -> throwError (show pos <> " transFunDecsHead did not put the function in the map")
         f _ = throwError (show pos <> " internal precondition violated at transFunDecBody")
 
 
