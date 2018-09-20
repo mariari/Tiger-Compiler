@@ -21,7 +21,7 @@ import qualified Data.Set        as Set
 import           Control.Monad.State.Lazy
 import           Control.Monad.Reader
 import           Control.Monad.Except
-
+import           Data.Foldable (traverse_)
 -- Translation type
 -- will be expanded upon in chapter 7
 type TranslateExp = ()
@@ -153,7 +153,7 @@ transExp' inLoop (Absyn.Funcall fnSym args pos) = do
       return (Expty {expr = (), typ = result})
 
 transExp' inLoop (Absyn.Assign var toPut pos) = do
-  VarTy {var = envVar} <- transVar var
+  VarTy {var = envVar}    <- transVar var
   Expty {typ = toPutType} <- transExp' inLoop toPut
   case envVar of
     Env.FunEntry {}                       -> throwError (show pos <> " can't set a function")
@@ -176,7 +176,7 @@ transExp' inLoop (Absyn.ArrCreate tyid length content pos) = do
 
 transExp' inLoop (Absyn.RecCreate tyid givens pos) = do
   Trans {tm = typeMap} <- get
-  recType <- liftIO $ traverse actualType (typeMap Map.!? tyid)
+  recType              <- liftIO $ traverse actualType (typeMap Map.!? tyid)
   case recType of
     Nothing -> throwError (show pos <> " record " <> S.unintern tyid <> " undefined")
     Just (PT.RECORD syms uniqueType) -> do
@@ -273,7 +273,11 @@ transTy refMap (Absyn.RecordTy recs) = do
   return (PT.RECORD (reverse xs) unique, refMap)
 
 transDec :: MonadTran m => [Absyn.Dec] -> Absyn.Pos -> m ()
-transDec decs pos = transTypeDecs typeDecs pos >> transVarDecs varDecs pos >> return ()
+transDec decs pos = do
+  transTypeDecs     typeDecs pos
+  transFunDecsHead  funDecs  pos
+  transVarDecs      varDecs  pos
+  transFunDecsBody  funDecs  pos
   where
     typeDecs = filter isTypeDec     decs
     funDecs  = filter isFunctionDec decs
@@ -282,7 +286,7 @@ transDec decs pos = transTypeDecs typeDecs pos >> transVarDecs varDecs pos >> re
 transVarDecs decs pos = traverse f decs
   where
     f (Absyn.VarDec sym mType exp _) = do
-      Expty {typ}        <- transExp' False exp
+      Expty {typ}            <- transExp' False exp
       trans@(Trans {em, tm}) <- get
       let newMap = put (trans { em = Map.insert sym (Env.VarEntry {ty = typ, modifiable = True}) em })
       case mType of
@@ -292,6 +296,29 @@ transVarDecs decs pos = traverse f decs
                      Just x | x == typ -> newMap
                      Just x -> throwError (show pos <> " " <> show typ <> " is not " <> show x )
     f _ = throwError (show pos <> " violated precondition ")
+
+transFunDecsHead :: (MonadTran m, Traversable t, Show a) => t Absyn.Dec -> a -> m ()
+transFunDecsHead decs pos = traverse_ f decs
+  where f (Absyn.FunDec name fields mtype body pos) = do
+          trans@(Trans {em, tm}) <- get
+          types                  <- traverse (mapFieldDec (\_ x -> x)) fields
+          case mtype of
+            Nothing      -> put (trans { em = Map.insert name (Env.FunEntry types PT.UNIT) em})
+            Just symType -> case tm Map.!? symType of
+                             Nothing -> throwError (show pos <> " type " <> S.unintern symType <> " is undeifned")
+                             Just x  -> put (trans { em = Map.insert name (Env.FunEntry types x) em})
+        f _ = throwError (show pos <> " internal precondition violated at transFunDecHead")
+
+transFunDecsBody :: (MonadTran m, Traversable t, Show a) => t Absyn.Dec -> a -> m ()
+transFunDecsBody decs pos = traverse_ f decs
+  where f (Absyn.FunDec name fields mtype body pos) = do
+          trans@(Trans {em, tm}) <- get
+          types                  <- traverse (mapFieldDec (\n t -> (n, Env.VarEntry { ty = t
+                                                                                    , modifiable = True})))
+                                             fields
+          locallyInsert (transExp' False body) types
+        f _ = throwError (show pos <> " internal precondition violated at transFunDecBody")
+
 
 transTypeDecs :: MonadTran m => [Absyn.Dec] -> Absyn.Pos -> m ()
 transTypeDecs decs pos = foldM handle1 refMap decs >>= allDefined >> handleCycles decs pos
@@ -345,6 +372,15 @@ insertType sym tp = do
 
 -- Helper functions----------------------------------------------------------------------------
 
+
+mapFieldDec f (Absyn.FieldDec nameSym typSym pos) = do
+  Trans {tm} <- get
+  case tm Map.!? typSym of
+    Just typ -> return (f nameSym typ)
+    Nothing  -> throwError (show pos <> " var " <> S.unintern nameSym
+                                     <> " can't be typed " <> S.unintern typSym
+                                     <> " is undefined" )
+
 getOrCreateRefMap :: MonadTran m => RefMap -> S.Symbol -> m (Ref.IORef (Maybe PT.Type), RefMap)
 getOrCreateRefMap refMap sym =
   case refMap Map.!? sym of
@@ -367,6 +403,18 @@ locallyInsert1 expression (symb, envEntry) = do
 
   changeEnvValue symb val
 
+  return expResult
+
+locallyInsert :: MonadTran m => m b -> [(S.Symbol, Env.Entry)] -> m b
+locallyInsert expression xs = do
+  Trans {tm = typeMap, em = envMap} <- get
+  let vals = fmap (\(symb,_) -> (symb, envMap Map.!? symb)) xs
+
+  traverse (\(symb, envEntry) -> changeEnvValue symb (Just envEntry)) xs
+
+  expResult <- expression
+
+  traverse (uncurry changeEnvValue) vals
   return expResult
 
 -- Changes the Environment value... removing a value if there is none, else places the new value in the map
