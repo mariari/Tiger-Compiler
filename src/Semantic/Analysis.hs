@@ -1,6 +1,4 @@
 {-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE ConstraintKinds #-}
-{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE DuplicateRecordFields #-}
 
 module Semantic.Analysis where
@@ -12,7 +10,6 @@ import qualified Semantic.Environment as Env
 
 import           Data.Maybe
 import           Data.Monoid((<>))
-import           Control.Monad
 import qualified Data.IORef      as Ref
 import qualified Data.List       as List
 import qualified Data.Symbol     as S
@@ -22,8 +19,7 @@ import           Control.Monad.State.Lazy
 import           Control.Monad.Reader
 import           Control.Monad.Except
 import           Data.Foldable (traverse_)
--- Translation type
--- will be expanded upon in chapter 7
+
 type TranslateExp = ()
 
 type RefMap = Map.Map S.Symbol (Ref.IORef (Maybe PT.Type))
@@ -55,8 +51,7 @@ fresh = do
   return u
 
 type MonadTranErr m = (MonadError String m)
--- we need MonadIO for refs only.......
-type MonadTran    m = (MonadState  Translation m, MonadTranErr m, MonadIO m)
+type MonadTran    m = (MonadState  Translation m, MonadTranErr m, MonadIO m) -- IO is for refs only
 
 runMonadTran :: Env.TypeMap
              -> Env.EntryMap
@@ -180,7 +175,7 @@ transExp' inLoop (Absyn.RecCreate tyid givens pos) = do
   case recType of
     Nothing -> throwError (show pos <> " record " <> S.unintern tyid <> " undefined")
     Just (PT.RECORD syms uniqueType) -> do
-      let sortedRecType = List.sortOn fst syms -- with these two sorted, we can just compare
+      let sortedRecType = List.sortOn fst syms              -- with these two sorted, we can just compare
           sortedGivens  = List.sortOn Absyn.fieldTyp givens -- and error from there
       sortedGivenTypes <- traverse (\ (Absyn.Field sym exp pos) -> do
                                        Expty {typ = exType} <- transExp' inLoop exp
@@ -232,8 +227,7 @@ transVar (Absyn.Subscript arrayType expInt pos) = do
     Env.VarEntry {modifiable, ty} -> do
       actualTy <- liftIO (actualType ty)
       checkArrTyp actualTy pos
-      return $ VarTy { var = Env.VarEntry { ty = actualTy
-                                          , modifiable = modifiable }
+      return $ VarTy { var = Env.VarEntry { ty = actualTy , modifiable = modifiable }
                      , expr = expr }
 
 transVar (Absyn.FieldVar recordType field pos) = do
@@ -299,17 +293,19 @@ transVarDecs decs pos = traverse f decs
 
 transFunDecsHead :: (MonadTran m, Traversable t, Show a) => t Absyn.Dec -> a -> m ()
 transFunDecsHead decs pos = traverse_ f decs
-  where f (Absyn.FunDec name fields mtype body pos) = do
+  where
+    f (Absyn.FunDec name fields mtype body pos) = do
           trans@(Trans {em, tm}) <- get
           types                  <- traverse (mapFieldDec (\_ x -> x)) fields
           case mtype of
             Nothing      -> put (trans { em = Map.insert name (Env.FunEntry types PT.UNIT) em})
-            Just symType -> case tm Map.!? symType of
-                             Nothing -> throwError (show pos <> " type " <> S.unintern symType <> " is undeifned")
-                             Just x  -> do
-                               actualTy <- liftIO (actualType x)
-                               put (trans { em = Map.insert name (Env.FunEntry types actualTy) em})
-        f _ = throwError (show pos <> " internal precondition violated at transFunDecHead")
+            Just symType ->
+              case tm Map.!? symType of
+                Nothing -> throwError (show pos <> " type " <> S.unintern symType <> " is undeifned")
+                Just x  -> do
+                  actualTy <- liftIO (actualType x)
+                  put (trans { em = Map.insert name (Env.FunEntry types actualTy) em})
+    f _ = throwError (show pos <> " internal precondition violated at transFunDecHead")
 
 transFunDecsBody :: (MonadTran m, Traversable t, Show a) => t Absyn.Dec -> a -> m ()
 transFunDecsBody decs pos = traverse_ f decs
@@ -318,7 +314,6 @@ transFunDecsBody decs pos = traverse_ f decs
           types                  <- traverse (mapFieldDec (\n t -> (n, Env.VarEntry { ty = t
                                                                                     , modifiable = True})))
                                              fields
-
           Expty {typ} <- locallyInsert (transExp' False body) types
           bodyType    <- liftIO (actualType typ)
           case em Map.!? name of
@@ -327,7 +322,6 @@ transFunDecsBody decs pos = traverse_ f decs
               checkSameTyp trueResultType bodyType pos
             _ -> throwError (show pos <> " transFunDecsHead did not put the function in the map")
         f _ = throwError (show pos <> " internal precondition violated at transFunDecBody")
-
 
 transTypeDecs :: MonadTran m => [Absyn.Dec] -> Absyn.Pos -> m ()
 transTypeDecs decs pos = foldM handle1 refMap decs >>= allDefined >> handleCycles decs pos
@@ -349,7 +343,7 @@ transTypeDecs decs pos = foldM handle1 refMap decs >>= allDefined >> handleCycle
     f ref = do
       mty <- liftIO (Ref.readIORef ref)
       case mty of
-        Nothing -> throwError (show pos <> " not all type variables are not defined")
+        Nothing -> throwError (show pos <> " not all type variables are defined")
         Just x  -> return x
 
 writeWithRef :: MonadTran m => Ref.IORef (Maybe PT.Type) -> S.Symbol -> Absyn.Ty -> RefMap -> m RefMap
@@ -381,7 +375,6 @@ insertType sym tp = do
 
 -- Helper functions----------------------------------------------------------------------------
 
-
 mapFieldDec f (Absyn.FieldDec nameSym typSym pos) = do
   Trans {tm} <- get
   case tm Map.!? typSym of
@@ -403,26 +396,15 @@ getOrCreateRefMap refMap sym =
 -- when we start interpreting code... so if that doesn't happen at this pass, replace with
 -- adds a symbol to the envEntry replacing what is there for this scope
 locallyInsert1 :: MonadTran m => m b -> (S.Symbol, Env.Entry) -> m b
-locallyInsert1 expression (symb, envEntry) = do
-  Trans {tm = typeMap, em = envMap} <- get
-  let val = envMap Map.!? symb
-  changeEnvValue symb (Just envEntry)
-
-  expResult <- expression
-
-  changeEnvValue symb val
-
-  return expResult
+locallyInsert1 e x = locallyInsert e [x]
 
 locallyInsert :: MonadTran m => m b -> [(S.Symbol, Env.Entry)] -> m b
 locallyInsert expression xs = do
   Trans {tm = typeMap, em = envMap} <- get
   let vals = fmap (\(symb,_) -> (symb, envMap Map.!? symb)) xs
 
-  traverse (\(symb, envEntry) -> changeEnvValue symb (Just envEntry)) xs
-
+  traverse (uncurry changeEnvValue . fmap Just) xs
   expResult <- expression
-
   traverse (uncurry changeEnvValue) vals
   return expResult
 
@@ -463,46 +445,41 @@ handleInfixInt    = handleInfixExp checkInt
 handleInfixStr    = handleInfixExp checkStr
 handleInfixStrInt = handleInfixExp checkStrInt
 
-
--- Check checks whether the arguments are of the correct type if not throw a monadError
-checkInt :: (MonadTranErr m, Show a) => Expty -> a -> m ()
-checkInt (Expty {typ = PT.INT}) pos = return  ()
-checkInt (Expty {typ = _})      pos = throwError (show pos <> " integer required")
-
-checkNil :: (MonadTranErr m, Show a) => Expty -> a -> m ()
-checkNil (Expty {typ = PT.NIL}) pos = return ()
-checkNil (Expty {typ = _})      pos = throwError (show pos <> " null required")
-
-checkArr :: (MonadTranErr m, Show a) => Expty -> a -> m PT.Type
+checkArr :: (Show a, MonadTranErr m) => Expty -> a -> m PT.Type
 checkArr (Expty {typ = PT.ARRAY typ _}) pos = return typ
 checkArr (Expty {typ = _})              pos = throwError (show pos <> " Array type required")
 
-checkArrTyp :: (MonadTranErr m, Show a) => PT.Type -> a -> m ()
-checkArrTyp (PT.ARRAY typ _) pos = return ()
-checkArrTyp _                pos = throwError (show pos <> " Array type required")
+checkInt, checkNil, checkStrInt :: (MonadTranErr m, Show a) => Expty -> a -> m ()
 
-checkRecType :: (MonadTranErr m, Show a) => PT.Type -> a -> m ()
-checkRecType (PT.RECORD _ _) pos = return ()
-checkRecType _               pos = throwError (show pos <> " record type required")
+checkInt (Expty {typ = PT.INT}) pos = return  ()
+checkInt (Expty {typ = _})      pos = throwError (show pos <> " integer required")
 
-checkStr :: (MonadTranErr m, Show a) => Expty -> a -> m ()
+checkNil (Expty {typ = PT.NIL}) pos = return ()
+checkNil (Expty {typ = _})      pos = throwError (show pos <> " null required")
+
 checkStr (Expty {typ = PT.STRING}) pos = return  ()
 checkStr (Expty {typ = _})         pos = throwError (show pos <> " string required")
 
-checkStrInt :: (MonadTranErr m, Show a) => Expty -> a -> m ()
+checkSame :: (MonadTranErr m, Show a) => Expty -> Expty -> a -> m ()
+checkSame (Expty {typ = x}) (Expty {typ = y}) = checkSameTyp x y
+
 checkStrInt (Expty {typ = PT.STRING}) pos = return  ()
 checkStrInt (Expty {typ = PT.INT})    pos = return  ()
 checkStrInt (Expty {typ = _})         pos = throwError (show pos <> " integer or string required")
 
-checkSame :: (MonadTranErr m, Show a) => Expty -> Expty -> a -> m ()
-checkSame (Expty {typ = x}) (Expty {typ = y}) = checkSameTyp x y
+checkArrTyp (PT.ARRAY typ _) pos = return ()
+checkArrTyp _                pos = throwError (show pos <> " Array type required")
+
+checkRecType (PT.RECORD _ _) pos = return ()
+checkRecType _               pos = throwError (show pos <> " record type required")
 
 -- A variant of checkSame that works on PT.Type
 checkSameTyp :: (MonadTranErr m, Show a) => PT.Type -> PT.Type -> a -> m ()
 checkSameTyp (PT.RECORD _ xid) (PT.RECORD _ yid) pos
   | xid == yid = return ()
   | otherwise  = throwError (show pos <> " records are of different type")
-checkSameTyp (PT.RECORD _ xid) nil pos = return ()
+checkSameTyp (PT.RECORD _ xid) PT.NIL pos = return ()
+checkSameTyp PT.NIL (PT.RECORD _ xid) pos = return ()
 checkSameTyp (PT.ARRAY _ xid) (PT.ARRAY _ yid) pos
   | xid == yid = return ()
   | otherwise  = throwError (show pos <> " arrays are of different type")
@@ -512,7 +489,7 @@ checkSameTyp x y pos
 
 isTypeDec :: Absyn.Dec -> Bool
 isTypeDec (Absyn.TypeDec {}) = True
-isTypeDec _                     = False
+isTypeDec _                  = False
 
 isFunctionDec (Absyn.FunDec {}) = True
 isFunctionDec _                 = False
@@ -520,8 +497,6 @@ isFunctionDec _                 = False
 isVarDec (Absyn.VarDec {}) = True
 isVarDec _                 = False
 
--- goes through the name lookup and gives back the actual type
--- will give back a name only if it doesn't point to anything.
 actualType :: PT.Type -> IO PT.Type
 actualType (PT.NAME sym ref) = do
   mtp <- Ref.readIORef ref

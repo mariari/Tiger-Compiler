@@ -1,11 +1,6 @@
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 module Control.Monad.Unique where
-
 
 -- Only works nicely in the one instance I'm using it
 -- Was having issues with
