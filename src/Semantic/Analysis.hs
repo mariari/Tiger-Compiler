@@ -135,13 +135,13 @@ transExp' inLoop (Absyn.IfThen pred then' pos) = do
 transExp' inLoop (Absyn.Funcall fnSym args pos) = do
   Trans {em = envMap} <- get
   case envMap Map.!? fnSym of
-    Nothing                 -> throwError (show pos <> " function " <> S.unintern fnSym <> " is not defined")
-    Just (Env.VarEntry _ _) -> throwError (show pos <> " variable " <> S.unintern fnSym <> " is not a function")
-    Just (Env.FunEntry {Env.formals = formals, Env.result = result}) -> do
+    Nothing                -> throwError (show pos <> " function " <> S.unintern fnSym <> " is not defined")
+    Just (Env.VarEntry {}) -> throwError (show pos <> " variable " <> S.unintern fnSym <> " is not a function")
+    Just (Env.FunEntry {formals, result}) -> do
       zipWithM_ (\arg formal -> do
-                    Expty {typ = argType} <- transExp' inLoop arg
+                    Expty {typ}  <- transExp' inLoop arg
                     actualFormal <- liftIO (actualType formal)
-                    actualArg    <- liftIO (actualType argType)
+                    actualArg    <- liftIO (actualType typ)
                     checkSameTyp actualFormal actualArg pos)
                 args
                 formals
@@ -159,35 +159,35 @@ transExp' inLoop (Absyn.ArrCreate tyid length content pos) = do
   Trans {tm = typeMap} <- get
   lengthExp            <- transExp' inLoop length
   checkInt lengthExp pos
-  arrType <- liftIO $ traverse actualType (typeMap Map.!? tyid)
+  arrType <- liftIO (traverse actualType (typeMap Map.!? tyid))
   case arrType of
-    Nothing -> throwError (show pos <> " array type " <> S.unintern tyid <> " undefined")
     Just (PT.ARRAY typ uniqueId) -> do
       Expty {typ = contentType} <- transExp' inLoop content
       checkSameTyp typ contentType pos
       return (Expty {expr = (), typ = (PT.ARRAY typ uniqueId)})
-    Just x -> throwError (show pos <> " " <> S.unintern tyid
-                         <> " is not of type array, but of type " <> show x)
+    Nothing -> throwError (show pos <> " array type " <> S.unintern tyid <> " undefined")
+    Just x  -> throwError (show pos <> " " <> S.unintern tyid
+                                    <> " is not of type array, but of type " <> show x)
 
 transExp' inLoop (Absyn.RecCreate tyid givens pos) = do
   Trans {tm = typeMap} <- get
   recType              <- liftIO $ traverse actualType (typeMap Map.!? tyid)
   case recType of
-    Nothing -> throwError (show pos <> " record " <> S.unintern tyid <> " undefined")
     Just (PT.RECORD syms uniqueType) -> do
       let sortedRecType = List.sortOn fst syms              -- with these two sorted, we can just compare
           sortedGivens  = List.sortOn Absyn.fieldTyp givens -- and error from there
       sortedGivenTypes <- traverse (\ (Absyn.Field sym exp pos) -> do
-                                       Expty {typ = exType} <- transExp' inLoop exp
-                                       return (sym, exType, pos))
+                                       Expty {typ} <- transExp' inLoop exp
+                                       return (sym, typ, pos))
                                    sortedGivens
       zipWithM_ (\ (_, recType)
                    (_, givenType, p) -> checkSameTyp recType givenType p)
                 sortedRecType
                 sortedGivenTypes
       return (Expty {expr = (), typ = PT.RECORD syms uniqueType})
-    Just x -> throwError (show pos <> " " <> S.unintern tyid
-                         <> " is not of type record, but of type " <> show x)
+    Nothing -> throwError (show pos <> " record " <> S.unintern tyid <> " undefined")
+    Just x  -> throwError (show pos <> " " <> S.unintern tyid
+                                    <> " is not of type record, but of type " <> show x)
 
 transExp' inLoop (Absyn.Let decs exps pos) = do
   currentEnv <- get
@@ -220,26 +220,22 @@ transVar (Absyn.SimpleVar sym pos) = do
 transVar (Absyn.Subscript arrayType expInt pos) = do
   intExpty <- transExp' False expInt -- not going to allow breaking in an array lookup!
   checkInt intExpty pos
-  VarTy {var,expr} <- transVar arrayType
+  VarTy {var, expr} <- transVar arrayType
   case var of
-    Env.FunEntry {} ->
-      throwError (show pos <> " tried to do array lookup on a function")
+    Env.FunEntry {} -> throwError (show pos <> " tried to do array lookup on a function")
     Env.VarEntry {modifiable, ty} -> do
       actualTy <- liftIO (actualType ty)
       checkArrTyp actualTy pos
-      return $ VarTy { var = Env.VarEntry { ty = actualTy , modifiable = modifiable }
-                     , expr = expr }
+      return (VarTy { var = Env.VarEntry { ty = actualTy , modifiable }, expr })
 
 transVar (Absyn.FieldVar recordType field pos) = do
-  VarTy {var,expr} <- transVar recordType
+  VarTy {var, expr} <- transVar recordType
   case var of
     Env.FunEntry {} -> throwError (show pos <> " tried to do record lookup on a function")
     Env.VarEntry {modifiable, ty} -> do
       actualTy <- liftIO (actualType ty)
       checkRecType actualTy pos
-      return $ VarTy { var = Env.VarEntry { ty = actualTy
-                                          , modifiable = modifiable}
-                     , expr = expr }
+      return (VarTy { var = Env.VarEntry { ty = actualTy, modifiable}, expr })
 
 transTy :: MonadTran m => RefMap -> Absyn.Ty -> m (PT.Type, RefMap)
 transTy refMap (Absyn.NameTy sym pos) = do
@@ -285,43 +281,46 @@ transVarDecs decs pos = traverse f decs
       let newMap = put (trans { em = Map.insert sym (Env.VarEntry {ty = typ, modifiable = True}) em })
       case mType of
         Nothing  -> newMap
-        Just sty -> case tm Map.!? sty of
-                     Nothing -> throwError (show pos <> " type " <> S.unintern sty <> " is not defined ")
-                     Just x | x == typ -> newMap
-                     Just x -> throwError (show pos <> " " <> show typ <> " is not " <> show x )
+        Just sty ->
+          case tm Map.!? sty of
+            Nothing -> throwError (show pos <> " type " <> S.unintern sty <> " is not defined ")
+            Just x
+              | x == typ  -> newMap
+              | otherwise -> throwError (show pos <> " " <> show typ <> " is not " <> show x )
     f _ = throwError (show pos <> " violated precondition ")
 
 transFunDecsHead :: (MonadTran m, Traversable t, Show a) => t Absyn.Dec -> a -> m ()
 transFunDecsHead decs pos = traverse_ f decs
   where
     f (Absyn.FunDec name fields mtype body pos) = do
-          trans@(Trans {em, tm}) <- get
-          types                  <- traverse (mapFieldDec (\_ x -> x)) fields
-          case mtype of
-            Nothing      -> put (trans { em = Map.insert name (Env.FunEntry types PT.UNIT) em})
-            Just symType ->
-              case tm Map.!? symType of
-                Nothing -> throwError (show pos <> " type " <> S.unintern symType <> " is undeifned")
-                Just x  -> do
-                  actualTy <- liftIO (actualType x)
-                  put (trans { em = Map.insert name (Env.FunEntry types actualTy) em})
+      Trans {em, tm} <- get
+      types          <- traverse (mapFieldDec (\_ x -> x)) fields
+      let putIn x = modify (\t -> t { em = Map.insert name (Env.FunEntry types x) em })
+      case mtype of
+        Nothing      -> putIn PT.UNIT
+        Just symType ->
+          case tm Map.!? symType of
+            Nothing -> throwError (show pos <> " type " <> S.unintern symType <> " is undeifned")
+            Just x  -> do
+              actualTy <- liftIO (actualType x)
+              putIn actualTy
     f _ = throwError (show pos <> " internal precondition violated at transFunDecHead")
 
 transFunDecsBody :: (MonadTran m, Traversable t, Show a) => t Absyn.Dec -> a -> m ()
 transFunDecsBody decs pos = traverse_ f decs
-  where f (Absyn.FunDec name fields mtype body pos) = do
-          trans@(Trans {em, tm}) <- get
-          types                  <- traverse (mapFieldDec (\n t -> (n, Env.VarEntry { ty = t
-                                                                                    , modifiable = True})))
-                                             fields
-          Expty {typ} <- locallyInsert (transExp' False body) types
-          bodyType    <- liftIO (actualType typ)
-          case em Map.!? name of
-            Just (Env.FunEntry {result}) -> do
-              trueResultType <- liftIO (actualType result)
-              checkSameTyp trueResultType bodyType pos
-            _ -> throwError (show pos <> " transFunDecsHead did not put the function in the map")
-        f _ = throwError (show pos <> " internal precondition violated at transFunDecBody")
+  where
+    makeVar n t = (n, Env.VarEntry { ty = t, modifiable = True })
+    f (Absyn.FunDec name fields mtype body pos) = do
+      Trans {em, tm} <- get
+      types          <- traverse (mapFieldDec makeVar) fields
+      Expty {typ}    <- locallyInsert (transExp' False body) types
+      bodyType       <- liftIO (actualType typ)
+      case em Map.!? name of
+        Just (Env.FunEntry {result}) -> do
+          trueResultType <- liftIO (actualType result)
+          checkSameTyp trueResultType bodyType pos
+        _ -> throwError (show pos <> " transFunDecsHead did not put the function in the map")
+    f _ = throwError (show pos <> " internal precondition violated at transFunDecBody")
 
 transTypeDecs :: MonadTran m => [Absyn.Dec] -> Absyn.Pos -> m ()
 transTypeDecs decs pos = foldM handle1 refMap decs >>= allDefined >> handleCycles decs pos
@@ -338,7 +337,7 @@ transTypeDecs decs pos = foldM handle1 refMap decs >>= allDefined >> handleCycle
         Nothing -> do
           symRef <- liftIO (Ref.newIORef Nothing)
           writeWithRef symRef sym ty refMap
-    handle1 refMap _  = throwError (show pos <> " precondition defied, a non-type was sent to transTypeDecs")
+    handle1 refMap _  = throwError (show pos <> " a non-type was sent to transTypeDecs")
     allDefined refMap = traverse f refMap
     f ref = do
       mty <- liftIO (Ref.readIORef ref)
@@ -361,17 +360,16 @@ handleCycles decs pos = foldM (recurse Set.empty) varSet varSet >> return ()
     f _                                     set = set
     recurse seen set x
       | Set.member x seen = throwError (show pos <> " cycle detected " <> show seen <> " is in a cycle")
-      | otherwise         = do Trans {tm} <- get
-                               case Map.lookup x tm of
-                                 Just (PT.NAME v ref) | Set.member v set -> do
-                                       mRef <- liftIO (Ref.readIORef ref)
-                                       recurse (Set.insert x seen) set v
-                                 _ -> return (set Set.\\ seen)
+      | otherwise         = do
+          Trans {tm} <- get
+          case Map.lookup x tm of
+            Just (PT.NAME v _) | Set.member v set -> recurse (Set.insert x seen) set v
+            _                                     -> return (set Set.\\ seen)
 
 insertType :: MonadTran m => S.Symbol -> PT.Type -> m ()
 insertType sym tp = do
-  trans@(Trans {tm = typeMap}) <- get
-  put (trans {tm = Map.insert sym tp typeMap})
+  Trans { tm } <- get
+  modify (\t -> t {tm = Map.insert sym tp tm})
 
 -- Helper functions----------------------------------------------------------------------------
 
@@ -387,8 +385,8 @@ getOrCreateRefMap :: MonadTran m => RefMap -> S.Symbol -> m (Ref.IORef (Maybe PT
 getOrCreateRefMap refMap sym =
   case refMap Map.!? sym of
     Nothing -> do
-      Trans {tm = typeMap} <- get
-      newRef <- liftIO (Ref.newIORef (typeMap Map.!? sym))
+      Trans {tm} <- get
+      newRef     <- liftIO (Ref.newIORef (tm Map.!? sym))
       return (newRef, Map.insert sym newRef refMap)
     Just ref -> return (ref, refMap)
 
