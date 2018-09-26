@@ -1,4 +1,4 @@
-module Data.IORef.Show where
+module Data.IORef.Show (module Data.IORef) where
 
 import Data.IORef
 

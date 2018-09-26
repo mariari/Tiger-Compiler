@@ -1,8 +1,8 @@
 module AbstractSyntax where
 
 import Data.Symbol
-import Data.IORef
 import Data.IORef.Show
+
 type Program = Exp
 
 type Line = Int
@@ -40,23 +40,23 @@ data FieldDec = FieldDec !Symbol
                          !(IORef Bool)
                          !Symbol
                          {-# UNPACK #-} !Pos
-              deriving (Show)
+              deriving Show
 
 data Ty = NameTy   !Symbol {-# UNPACK #-} !Pos
         | ArrayTy  !Symbol {-# UNPACK #-} !Pos
         | RecordTy [FieldDec]
-        deriving (Show)
+        deriving Show
 
 -- non-left recursive
 data Var = SimpleVar !Symbol     {-# UNPACK #-} !Pos
          | FieldVar  Var !Symbol {-# UNPACK #-} !Pos
          | Subscript Var Exp     {-# UNPACK #-} !Pos
-         deriving (Show)
+         deriving Show
 
 
 data Dec = FunDec !Symbol [FieldDec]   (Maybe Symbol) Exp {-# UNPACK #-} !Pos
          | VarDec !Symbol (IORef Bool) (Maybe Symbol) Exp {-# UNPACK #-} !Pos
          | TypeDec !Symbol Ty                             {-# UNPACK #-} !Pos
-         deriving (Show)
+         deriving Show
 
 data Op = Plus | Minus | Times | Div | Eq | Neq | Lt | Le | Gt | Ge | And | Or deriving (Show,Eq)

@@ -1,7 +1,6 @@
 module ProgramTypes where
 
 import           Data.Symbol
-import           Data.IORef
 import           Data.IORef.Show
 import qualified Data.Map.Strict as Map -- we use Map as we need ordering on the symbols
 

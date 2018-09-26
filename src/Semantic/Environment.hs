@@ -3,17 +3,19 @@ module Semantic.Environment where
 import qualified ProgramTypes   as PT
 import qualified AbstractSyntax as Absyn
 
-import qualified Data.Symbol as S
+import qualified Data.Symbol     as S
 import qualified Data.Map.Strict as Map -- we are use ordering in symbols, so we can't use HashMap
 
 -- Environment
 type TypeMap  = PT.SymMap PT.Type  -- for types
 type EntryMap = PT.SymMap Entry -- for functions and variables
 
-data Entry = VarEntry {ty         :: !PT.Type
-                      ,modifiable :: !Bool}
-           | FunEntry {formals :: ![PT.Type]
-                      ,result  :: !PT.Type}
+data Entry = VarEntry { ty         :: !PT.Type
+                      , modifiable :: !Bool
+                      }
+           | FunEntry { formals :: ![PT.Type]
+                      , result  :: !PT.Type
+                      }
            deriving Show
 
 baseTmap :: TypeMap
