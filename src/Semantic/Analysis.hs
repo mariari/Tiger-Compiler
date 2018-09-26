@@ -45,7 +45,6 @@ data Translation = Trans { _tm   :: !Env.TypeMap
                          , _em   :: !Env.EntryMap
                          , _uniq :: !Int
                          }  deriving Show
-
 makeLenses ''Translation
 
 -- grabs a unique value from the Translation state
@@ -138,7 +137,7 @@ transExp' inLoop (Absyn.IfThen pred then' pos) = do
 
 transExp' inLoop (Absyn.Funcall fnSym args pos) = do
   trans <- get
-  case (trans^.em) Map.!? fnSym of
+  case trans^.em.at fnSym of
     Nothing                -> throwError (show pos <> " function " <> S.unintern fnSym <> " is not defined")
     Just (Env.VarEntry {}) -> throwError (show pos <> " variable " <> S.unintern fnSym <> " is not a function")
     Just (Env.FunEntry {formals, result}) -> do
@@ -286,7 +285,7 @@ transVarDecs decs pos = traverse f decs
       case mType of
         Nothing  -> newMap
         Just sty ->
-          case (trans^.tm) Map.!? sty of
+          case trans^.tm.at sty of
             Nothing -> throwError (show pos <> " type " <> S.unintern sty <> " is not defined ")
             Just x
               | x == _typ  -> newMap
@@ -303,7 +302,7 @@ transFunDecsHead decs pos = traverse_ f decs
       case mtype of
         Nothing      -> putIn PT.UNIT
         Just symType ->
-          case (trans^.tm) Map.!? symType of
+          case trans^.tm.at symType of
             Nothing -> throwError (show pos <> " type " <> S.unintern symType <> " is undeifned")
             Just x  -> do
               actualTy <- liftIO (actualType x)
@@ -319,7 +318,7 @@ transFunDecsBody decs pos = traverse_ f decs
       types        <- traverse (mapFieldDec makeVar) fields
       Expty {_typ} <- locallyInsert (transExp' False body) types
       bodyType     <- liftIO (actualType _typ)
-      case (trans^.em) Map.!? name of
+      case trans^.em.at name of
         Just (Env.FunEntry {result}) -> do
           trueResultType <- liftIO (actualType result)
           checkSameTyp trueResultType bodyType pos
@@ -377,7 +376,7 @@ insertType sym tp = modify (tm %~ Map.insert sym tp)
 
 mapFieldDec f (Absyn.FieldDec nameSym esc typSym pos) = do
   trans <- get
-  case (trans^.tm) Map.!? typSym of
+  case trans^.tm^.at typSym of
     Just typ -> return (f nameSym typ)
     Nothing  -> throwError (show pos <> " var " <> S.unintern nameSym
                                      <> " can't be typed " <> S.unintern typSym
@@ -388,7 +387,7 @@ getOrCreateRefMap refMap sym =
   case refMap Map.!? sym of
     Nothing -> do
       trans  <- get
-      newRef <- liftIO (Ref.newIORef ((trans^.tm) Map.!? sym))
+      newRef <- liftIO (Ref.newIORef (trans^.tm.at sym))
       return (newRef, Map.insert sym newRef refMap)
     Just ref -> return (ref, refMap)
 
@@ -401,7 +400,7 @@ locallyInsert1 e x = locallyInsert e [x]
 locallyInsert :: MonadTran m => m b -> [(S.Symbol, Env.Entry)] -> m b
 locallyInsert expression xs = do
   trans <- get
-  let vals = fmap (\(symb,_) -> (symb, (trans^.em) Map.!? symb)) xs
+  let vals = fmap (\(symb,_) -> (symb, trans^.em.at symb)) xs
   traverse (uncurry changeEnvValue . fmap Just) xs
   expResult <- expression
   traverse (uncurry changeEnvValue) vals
