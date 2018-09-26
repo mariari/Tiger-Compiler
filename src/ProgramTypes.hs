@@ -2,12 +2,11 @@ module ProgramTypes where
 
 import           Data.Symbol
 import           Data.IORef
+import           Data.IORef.Show
 import qualified Data.Map.Strict as Map -- we use Map as we need ordering on the symbols
 
 type Unique = Int
 
-instance Show (IORef a) where
-  show _ = "IOREF"
 
 data Type = INT
           | STRING

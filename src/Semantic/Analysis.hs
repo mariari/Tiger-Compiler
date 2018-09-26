@@ -106,7 +106,7 @@ transExp' inLoop (Absyn.While pred body pos) = do
   checkNil body' pos
   return (Expty {expr = (), typ = PT.NIL})
 
-transExp' inLoop (Absyn.For var from to body pos) = do
+transExp' inLoop (Absyn.For var esc from to body pos) = do
   from' <- transExp' inLoop from
   to'   <- transExp' inLoop to
   Trans {tm = tm, em = em} <- get
@@ -254,7 +254,7 @@ transTy refMap (Absyn.ArrayTy sym pos) = do
         PT.ARRAY _ num -> return (PT.ARRAY typ num, refMap)
         _              -> (\f -> (PT.ARRAY typ f, refMap)) <$> fresh
 transTy refMap (Absyn.RecordTy recs) = do
-  (xs,refMap) <- foldM (\ (xs, refMap) (Absyn.FieldDec name tySym pos) -> do
+  (xs,refMap) <- foldM (\ (xs, refMap) (Absyn.FieldDec name esc tySym pos) -> do
                           (refType, refMap) <- getOrCreateRefMap refMap tySym
                           refValue          <- liftIO (Ref.readIORef refType)
                           return ((name, fromMaybe (PT.NAME tySym refType) refValue) : xs, refMap))
@@ -275,7 +275,7 @@ transDec decs pos = do
 
 transVarDecs decs pos = traverse f decs
   where
-    f (Absyn.VarDec sym mType exp _) = do
+    f (Absyn.VarDec sym esc mType exp _) = do
       Expty {typ}            <- transExp' False exp
       trans@(Trans {em, tm}) <- get
       let newMap = put (trans { em = Map.insert sym (Env.VarEntry {ty = typ, modifiable = True}) em })
@@ -373,7 +373,7 @@ insertType sym tp = do
 
 -- Helper functions----------------------------------------------------------------------------
 
-mapFieldDec f (Absyn.FieldDec nameSym typSym pos) = do
+mapFieldDec f (Absyn.FieldDec nameSym esc typSym pos) = do
   Trans {tm} <- get
   case tm Map.!? typSym of
     Just typ -> return (f nameSym typ)

@@ -4,30 +4,41 @@ import           Text.Parsec
 import           Text.Parsec.String
 import           Data.Monoid
 import           Text.ParserCombinators.Parsec.Language
-import qualified Text.ParserCombinators.Parsec.Token as T
+import           Control.Monad.Trans (lift)
 import           Control.Monad.Identity
-import           Text.Parsec.Expr as E
-import qualified Data.Symbol as S
+import qualified Data.IORef                          as Ref
+import qualified Text.ParserCombinators.Parsec.Token as T
+import           Text.Parsec.Expr                    as E
+import qualified Data.Symbol                         as S
 
 import AbstractSyntax
 
-langaugeDef :: GenLanguageDef String u Identity
-langaugeDef = emptyDef { T.reservedNames   = ["array", "if", "then", "else"
-                                             ,"while", "for", "to", "do", "let"
-                                             ,"in", "function", "var", "type"
-                                             ,"import", "primitive"]
-                       , T.reservedOpNames = [",", ":", ";", "(", ")", "[", "]",
-                                              "{", "}", ".", "+", "-", "*", "/",
-                                              "=", "<>", "<", "<=", ">", ">=", "&", "|", ":="]
-                       , T.identStart      = letter <|> char '_'
-                       , T.identLetter     = alphaNum <|> char '_'
-                       , T.caseSensitive   = True
-                       , nestedComments    = True
-                       , commentStart      = "/*"
-                       , commentEnd        = "*/"}
+-- Need IORefs so I can't use emptyDef
+type ParserIO x = ParsecT String () IO x
 
+langaugeDef :: GenLanguageDef String u IO
+langaugeDef = LanguageDef
+              { T.reservedNames   = ["array", "if", "then", "else"
+                                    ,"while", "for", "to", "do", "let"
+                                    ,"in", "function", "var", "type"
+                                    ,"import", "primitive"]
+              , T.reservedOpNames = [",", ":", ";", "(", ")", "[", "]",
+                                     "{", "}", ".", "+", "-", "*", "/",
+                                     "=", "<>", "<", "<=", ">", ">=", "&", "|", ":="]
+              , T.identStart      = letter <|> char '_'
+              , T.identLetter     = alphaNum <|> char '_'
+              , T.caseSensitive   = True
+              , commentStart      = "/*"
+              , commentEnd        = "*/"
+              , nestedComments    = True
+              , identStart        = letter <|> char '_'
+              , identLetter       = alphaNum <|> oneOf "_'"
+              , opStart           = opLetter langaugeDef
+              , opLetter          = oneOf ":!#$%&*+./<=>?@\\^|-~"
+              , commentLine       = ""
+              }
 
-lexer :: T.GenTokenParser String u Identity
+lexer :: T.GenTokenParser String u IO
 lexer = T.makeTokenParser langaugeDef
 
 -- could make these
@@ -49,14 +60,15 @@ sourceLineCol source = (sourceLine source, sourceColumn source)
 
 getLineCol = fmap sourceLineCol getPosition
 
+symbol :: ParserIO S.Symbol
 symbol = S.intern <$> identifier
 
-parseTigerLine = parse expression ""
+parseTigerLine = runParserT expression () ""
 
-expression :: Parser Exp
+expression :: ParserIO Exp
 expression = buildExpressionParser optable expression' <?> "Exp"
 
-expression' :: Parser Exp
+expression' ::  ParserIO Exp
 expression' =  seq'
            <|> (ifThen <?> "if then")
            <|> for
@@ -73,13 +85,13 @@ expression' =  seq'
            <|> stringLit
            <|> intLit
 
-dec :: Parser Dec
+dec :: ParserIO Dec
 dec =  tydec
    <|> vardec
    <|> fundec
    <?> "declaration"
 
-tyP :: Parser Ty
+tyP :: ParserIO Ty
 tyP =  arrty
    <|> recty
    <|> namety
@@ -92,7 +104,7 @@ seq' = do
   seq <- parens (expression `sepBy` semi)
   return $ Sequence seq pos
 
-ifThen :: Parser Exp
+ifThen :: ParserIO Exp
 ifThen = do
   pos <- getLineCol
   reserved "if"
@@ -104,7 +116,7 @@ ifThen = do
     Just x  -> return $ IfThenElse pred then' x pos
     Nothing -> return $ IfThen     pred then'   pos
 
-for :: Parser Exp
+for :: ParserIO Exp
 for = do
   pos <- getLineCol
   reserved "for"
@@ -115,7 +127,8 @@ for = do
   end <- expression
   reserved "do"
   run <- expression
-  return $ For var from end run pos
+  esc <- lift (Ref.newIORef True)
+  return $ For var esc from end run pos
 
 while = do
   pos <- getLineCol
@@ -127,7 +140,7 @@ while = do
 
 assign = do
   pos <- getLineCol
-  lvalue <- lvalueParser
+  lvalue <- lvalueParserIO
   reservedOp ":="
   exp <- expression
   return $ Assign lvalue exp pos
@@ -167,7 +180,7 @@ recCreate = do
   fields <- braces (field' `sepBy` comma)
   return $ RecCreate tyid fields pos
 
-field' :: Parser Field
+field' :: ParserIO Field
 field' = do
   pos <- getLineCol
   id' <- symbol
@@ -185,7 +198,7 @@ intLit = do
 
 -- Haskells string has the same escape characters I think!
 
-stringLit :: Parser Exp
+stringLit :: ParserIO Exp
 stringLit = do
   pos <- getLineCol
   char '"'
@@ -203,31 +216,31 @@ leftRec p op = p >>= rest
   where
     rest x = (op >>= rest . ($ x)) <|> return x
 
-lvalue = Var <$> lvalueParser
+lvalue = Var <$> lvalueParserIO
 
-lvalueParser :: Parser Var
-lvalueParser = leftRec idParser (fieldExp <|> subscript)
+lvalueParserIO :: ParserIO Var
+lvalueParserIO = leftRec idParserIO (fieldExp <|> subscript)
   where
-    idParser = do
+    idParserIO = do
       pos <- getLineCol
       id' <- identifier
       return $ SimpleVar (S.intern id') pos
 
-fieldExp :: ParsecT String u Identity (Var -> Var)
+fieldExp :: ParserIO (Var -> Var)
 fieldExp = do
   pos <- getLineCol
   reservedOp "."
   a <- identifier
   return $ (\l -> FieldVar l (S.intern a) pos)
 
-subscript :: ParsecT String () Identity (Var -> Var)
+subscript :: ParserIO (Var -> Var)
 subscript = do
   pos <- getLineCol
   e <- brackets expression
   return (\l -> Subscript l e pos)
 
 -- Typ----------------------------------------------------------------------
-arrty :: Parser Ty
+arrty :: ParserIO Ty
 arrty = do
   pos <- getLineCol
   reserved "array"
@@ -243,15 +256,16 @@ namety = do
   return $ NameTy id' pos
 
 -- Declarations--------------------------------------------------------------
-fieldDec :: Parser FieldDec
+fieldDec :: ParserIO FieldDec
 fieldDec = do
   pos <- getLineCol
   id' <- symbol
   reservedOp ":"
-  typid <- symbol
-  return $ FieldDec id' typid pos
+  typid  <- symbol
+  escape <- lift (Ref.newIORef True)
+  return $ FieldDec id' escape typid pos -- Escape is set to true by default
 
-tydec :: Parser Dec
+tydec :: ParserIO Dec
 tydec = do
   pos <- getLineCol
   reserved "type"
@@ -260,7 +274,7 @@ tydec = do
   ty <- tyP
   return $ TypeDec typid ty pos
 
-fundec :: Parser Dec
+fundec :: ParserIO Dec
 fundec = do
   pos <- getLineCol
   reserved "function"
@@ -272,7 +286,7 @@ fundec = do
   exp <- expression
   return $ FunDec id' fields mtypid exp pos
 
-vardec :: Parser Dec
+vardec :: ParserIO Dec
 vardec = do
   pos <- getLineCol
   reserved "var"
@@ -281,16 +295,17 @@ vardec = do
   mtypid <- optionMaybe symbol
   reservedOp ":="
   exp <- expression
-  return $ VarDec id' mtypid exp pos
+  esc <- lift (Ref.newIORef True)
+  return $ VarDec id' esc mtypid exp pos
 
 -- Exp parser for numbers
 
 infixOp op pos exp1 exp2 = Infix' exp1 op exp2 pos
 
-createInfix :: String -> Op -> Parser (Exp -> Exp -> Exp)
+createInfix :: String -> Op -> ParserIO (Exp -> Exp -> Exp)
 createInfix opStr term = (getLineCol >>= return . infixOp term) <* reservedOp opStr
 
-listToChoice :: [(String, Op)] -> Parser (Exp -> Exp -> Exp)
+listToChoice :: [(String, Op)] -> ParserIO (Exp -> Exp -> Exp)
 listToChoice = choice . fmap (uncurry createInfix)
 
 createOpTable term = Infix term AssocLeft
