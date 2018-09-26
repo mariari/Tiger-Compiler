@@ -44,6 +44,7 @@ library
     , symbol
     , containers
     , unordered-containers
+    , lens
   default-language: Haskell2010
   default-extensions:
                BangPatterns

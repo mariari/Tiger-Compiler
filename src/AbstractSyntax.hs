@@ -9,26 +9,27 @@ type Line = Int
 type Column = Int
 
 type Pos = (Line, Column)
+type Escape = Bool
 
 -- Bools are an escape parameter
 
 data Exp = Var Var
-         | Nil                                 {-# UNPACK #-} !Pos
-         | IntLit !Integer                     {-# UNPACK #-} !Pos
-         | StringLit String                    {-# UNPACK #-} !Pos
-         | Break                               {-# UNPACK #-} !Pos
-         | Sequence [Exp]                      {-# UNPACK #-} !Pos
-         | Negation Exp                        {-# UNPACK #-} !Pos
-         | Funcall !Symbol [Exp]               {-# UNPACK #-} !Pos
-         | Infix' Exp Op Exp                   {-# UNPACK #-} !Pos
-         | ArrCreate !Symbol Exp Exp           {-# UNPACK #-} !Pos
-         | RecCreate !Symbol [Field]           {-# UNPACK #-} !Pos
-         | Assign Var Exp                      {-# UNPACK #-} !Pos
-         | IfThenElse Exp Exp Exp              {-# UNPACK #-} !Pos
-         | IfThen     Exp Exp                  {-# UNPACK #-} !Pos
-         | While Exp Exp                       {-# UNPACK #-} !Pos
-         | For Symbol (IORef Bool) Exp Exp Exp {-# UNPACK #-} !Pos
-         | Let [Dec] [Exp]                     {-# UNPACK #-} !Pos
+         | Nil                                   {-# UNPACK #-} !Pos
+         | IntLit !Integer                       {-# UNPACK #-} !Pos
+         | StringLit String                      {-# UNPACK #-} !Pos
+         | Break                                 {-# UNPACK #-} !Pos
+         | Sequence [Exp]                        {-# UNPACK #-} !Pos
+         | Negation Exp                          {-# UNPACK #-} !Pos
+         | Funcall !Symbol [Exp]                 {-# UNPACK #-} !Pos
+         | Infix' Exp Op Exp                     {-# UNPACK #-} !Pos
+         | ArrCreate !Symbol Exp Exp             {-# UNPACK #-} !Pos
+         | RecCreate !Symbol [Field]             {-# UNPACK #-} !Pos
+         | Assign Var Exp                        {-# UNPACK #-} !Pos
+         | IfThenElse Exp Exp Exp                {-# UNPACK #-} !Pos
+         | IfThen     Exp Exp                    {-# UNPACK #-} !Pos
+         | While Exp Exp                         {-# UNPACK #-} !Pos
+         | For Symbol (IORef Escape) Exp Exp Exp {-# UNPACK #-} !Pos
+         | Let [Dec] [Exp]                       {-# UNPACK #-} !Pos
          deriving Show
 
 data Field = Field { fieldTyp :: !Symbol
@@ -37,7 +38,7 @@ data Field = Field { fieldTyp :: !Symbol
                    } deriving Show
 
 data FieldDec = FieldDec !Symbol
-                         !(IORef Bool)
+                         !(IORef Escape)
                          !Symbol
                          {-# UNPACK #-} !Pos
               deriving Show
@@ -54,9 +55,9 @@ data Var = SimpleVar !Symbol     {-# UNPACK #-} !Pos
          deriving Show
 
 
-data Dec = FunDec !Symbol [FieldDec]   (Maybe Symbol) Exp {-# UNPACK #-} !Pos
-         | VarDec !Symbol (IORef Bool) (Maybe Symbol) Exp {-# UNPACK #-} !Pos
-         | TypeDec !Symbol Ty                             {-# UNPACK #-} !Pos
+data Dec = FunDec !Symbol [FieldDec]     (Maybe Symbol) Exp {-# UNPACK #-} !Pos
+         | VarDec !Symbol (IORef Escape) (Maybe Symbol) Exp {-# UNPACK #-} !Pos
+         | TypeDec !Symbol Ty                               {-# UNPACK #-} !Pos
          deriving Show
 
 data Op = Plus | Minus | Times | Div | Eq | Neq | Lt | Le | Gt | Ge | And | Or deriving (Show,Eq)

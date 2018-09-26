@@ -1,5 +1,6 @@
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module Semantic.Analysis where
 
@@ -8,6 +9,7 @@ import qualified ProgramTypes         as PT
 import qualified AbstractSyntax       as Absyn
 import qualified Semantic.Environment as Env
 
+import           Control.Lens
 import           Data.Maybe
 import           Data.Monoid((<>))
 import qualified Data.IORef      as Ref
@@ -24,31 +26,34 @@ type TranslateExp = ()
 
 type RefMap = Map.Map S.Symbol (Ref.IORef (Maybe PT.Type))
 
-data Expty = Expty { expr :: !TranslateExp
-                   , typ  :: !PT.Type
+data Expty = Expty { _expr :: !TranslateExp
+                   , _typ  :: !PT.Type
+                   } deriving Show
+makeLenses ''Expty
+
+data VarTy = VarTy { _var  :: !Env.Entry
+                   , _expr :: !TranslateExp
                    } deriving Show
 
-data VarTy = VarTy { var  :: !Env.Entry
-                   , expr :: !TranslateExp
-                   } deriving Show
-
-varTytoExpTy (VarTy {var = var, expr = expr}) =
-  let typ = case var of
+varTytoExpTy (VarTy {_var, _expr}) =
+  let _typ = case _var of
         Env.VarEntry {Env.ty = ty}     -> ty
         Env.FunEntry {Env.result = ty} -> ty
-  in Expty {expr = expr, typ = typ}
+  in Expty {_expr, _typ}
 
-data Translation = Trans { tm   :: !Env.TypeMap
-                         , em   :: !Env.EntryMap
-                         , uniq :: !Int
+data Translation = Trans { _tm   :: !Env.TypeMap
+                         , _em   :: !Env.EntryMap
+                         , _uniq :: !Int
                          }  deriving Show
+
+makeLenses ''Translation
 
 -- grabs a unique value from the Translation state
 fresh :: MonadState Translation m => m Int
 fresh = do
-  trans@(Trans {uniq = u}) <- get
-  put (trans {uniq = succ u})
-  return u
+  trans <- get
+  put (over uniq succ trans)
+  return (trans^.uniq)
 
 type MonadTranErr m = (MonadError String m)
 type MonadTran    m = (MonadState  Translation m, MonadTranErr m, MonadIO m) -- IO is for refs only
@@ -58,7 +63,7 @@ runMonadTran :: Env.TypeMap
              -> (StateT Translation (ExceptT e IO)) a
              -> IO (Either e (a, Translation))
 runMonadTran tm em f = runExceptT (runStateT f trans)
-  where trans = Trans {tm = tm, em = em, uniq = 0}
+  where trans = Trans {_tm = tm, _em = em, _uniq = 0}
 
 transExp :: Env.TypeMap -> Env.EntryMap -> Absyn.Exp -> IO Expty
 transExp tm em absyn = do
@@ -68,9 +73,9 @@ transExp tm em absyn = do
     Right (expt,tl) -> return expt
 
 transExp' :: MonadTran m => Bool -> Absyn.Exp -> m Expty
-transExp' _ (Absyn.IntLit _ _)    = return (Expty {expr = (), typ = PT.INT})
-transExp' _ (Absyn.Nil _)         = return (Expty {expr = (), typ = PT.NIL})
-transExp' _ (Absyn.StringLit _ _) = return (Expty {expr = (), typ = PT.STRING})
+transExp' _ (Absyn.IntLit _ _)    = return (Expty {_expr = (), _typ = PT.INT})
+transExp' _ (Absyn.Nil _)         = return (Expty {_expr = (), _typ = PT.NIL})
+transExp' _ (Absyn.StringLit _ _) = return (Expty {_expr = (), _typ = PT.STRING})
 transExp' _ (Absyn.Var x)         = varTytoExpTy <$> transVar x
 
 transExp' inLoop (Absyn.Infix' left x right pos) = case x of
@@ -90,13 +95,13 @@ transExp' inLoop (Absyn.Infix' left x right pos) = case x of
 transExp' inLoop (Absyn.Negation val pos) = do
   val' <- transExp' inLoop val
   checkInt val' pos
-  return (Expty {expr = (), typ = PT.INT})
+  return (Expty {_expr = (), _typ = PT.INT})
 
-transExp' inLoop (Absyn.Sequence [] pos) = return (Expty {expr = (), typ = PT.NIL})
+transExp' inLoop (Absyn.Sequence [] pos) = return (Expty {_expr = (), _typ = PT.NIL})
 transExp' inLoop (Absyn.Sequence xs pos) = last <$> traverse (transExp' inLoop) xs
 
 transExp' inLoop (Absyn.Break pos)
-  | inLoop    = return (Expty {expr = (), typ = PT.NIL})
+  | inLoop    = return (Expty {_expr = (), _typ = PT.NIL})
   | otherwise = throwError (show pos <> " break needs to be used inside a loop")
 
 transExp' inLoop (Absyn.While pred body pos) = do
@@ -104,18 +109,17 @@ transExp' inLoop (Absyn.While pred body pos) = do
   body' <- transExp' True body
   checkInt pred' pos
   checkNil body' pos
-  return (Expty {expr = (), typ = PT.NIL})
+  return (Expty {_expr = (), _typ = PT.NIL})
 
 transExp' inLoop (Absyn.For var esc from to body pos) = do
   from' <- transExp' inLoop from
   to'   <- transExp' inLoop to
-  Trans {tm = tm, em = em} <- get
   checkInt from' pos
   checkInt to' pos
   body' <- locallyInsert1 (transExp' True body) -- could replace with a get and put, we if we don't mutate
                           (var, Env.VarEntry {Env.ty = PT.INT, Env.modifiable = False})
   checkNil body' pos -- the false makes it so if we try to modify it, it errors
-  return (Expty {expr = (), typ = typ body'})
+  return (body' & expr %~ id)
 
 transExp' inLoop (Absyn.IfThenElse pred then' else' pos) = do
   pred'  <- transExp' inLoop pred
@@ -123,68 +127,68 @@ transExp' inLoop (Absyn.IfThenElse pred then' else' pos) = do
   else'' <- transExp' inLoop else'
   checkInt pred' pos
   checkSame then'' else'' pos
-  return (Expty {expr = (), typ = typ then''})
+  return (then'' & expr %~ id)
 
 transExp' inLoop (Absyn.IfThen pred then' pos) = do
   pred'  <- transExp' inLoop pred
   then'' <- transExp' inLoop then'
   checkInt pred' pos
   checkNil then'' pos
-  return (Expty {expr = (), typ = PT.NIL})
+  return (then'' & expr %~ id)
 
 transExp' inLoop (Absyn.Funcall fnSym args pos) = do
-  Trans {em = envMap} <- get
-  case envMap Map.!? fnSym of
+  trans <- get
+  case (trans^.em) Map.!? fnSym of
     Nothing                -> throwError (show pos <> " function " <> S.unintern fnSym <> " is not defined")
     Just (Env.VarEntry {}) -> throwError (show pos <> " variable " <> S.unintern fnSym <> " is not a function")
     Just (Env.FunEntry {formals, result}) -> do
       zipWithM_ (\arg formal -> do
-                    Expty {typ}  <- transExp' inLoop arg
+                    Expty {_typ} <- transExp' inLoop arg
                     actualFormal <- liftIO (actualType formal)
-                    actualArg    <- liftIO (actualType typ)
+                    actualArg    <- liftIO (actualType _typ)
                     checkSameTyp actualFormal actualArg pos)
                 args
                 formals
-      return (Expty {expr = (), typ = result})
+      return (Expty {_expr = (), _typ = result})
 
-transExp' inLoop (Absyn.Assign var toPut pos) = do
-  VarTy {var = envVar}    <- transVar var
-  Expty {typ = toPutType} <- transExp' inLoop toPut
+transExp' inLoop (Absyn.Assign var toPutE pos) = do
+  VarTy {_var = envVar} <- transVar var
+  toPut                 <- transExp' inLoop toPutE
   case envVar of
     Env.FunEntry {}                       -> throwError (show pos <> " can't set a function")
     Env.VarEntry {Env.modifiable = False} -> throwError (show pos <> " variable is not modifiable")
-    Env.VarEntry {Env.ty = varType}       -> Expty {expr = (), typ = toPutType}
-                                            <$ checkSameTyp varType toPutType pos
+    Env.VarEntry {Env.ty = varType}       -> (toPut & expr %~ id)
+                                            <$ checkSameTyp varType (toPut^.typ) pos
 transExp' inLoop (Absyn.ArrCreate tyid length content pos) = do
-  Trans {tm = typeMap} <- get
-  lengthExp            <- transExp' inLoop length
+  Trans {_tm = typeMap} <- get
+  lengthExp             <- transExp' inLoop length
   checkInt lengthExp pos
   arrType <- liftIO (traverse actualType (typeMap Map.!? tyid))
   case arrType of
-    Just (PT.ARRAY typ uniqueId) -> do
-      Expty {typ = contentType} <- transExp' inLoop content
-      checkSameTyp typ contentType pos
-      return (Expty {expr = (), typ = (PT.ARRAY typ uniqueId)})
+    Just (PT.ARRAY arrTyp uniqueId) -> do
+      content <- transExp' inLoop content
+      checkSameTyp arrTyp (content^.typ) pos
+      return (Expty {_expr = (), _typ = (PT.ARRAY arrTyp uniqueId)})
     Nothing -> throwError (show pos <> " array type " <> S.unintern tyid <> " undefined")
     Just x  -> throwError (show pos <> " " <> S.unintern tyid
                                     <> " is not of type array, but of type " <> show x)
 
 transExp' inLoop (Absyn.RecCreate tyid givens pos) = do
-  Trans {tm = typeMap} <- get
+  Trans {_tm = typeMap} <- get
   recType              <- liftIO $ traverse actualType (typeMap Map.!? tyid)
   case recType of
     Just (PT.RECORD syms uniqueType) -> do
       let sortedRecType = List.sortOn fst syms              -- with these two sorted, we can just compare
           sortedGivens  = List.sortOn Absyn.fieldTyp givens -- and error from there
       sortedGivenTypes <- traverse (\ (Absyn.Field sym exp pos) -> do
-                                       Expty {typ} <- transExp' inLoop exp
-                                       return (sym, typ, pos))
+                                       e <- transExp' inLoop exp
+                                       return (sym, e^.typ, pos))
                                    sortedGivens
       zipWithM_ (\ (_, recType)
                    (_, givenType, p) -> checkSameTyp recType givenType p)
                 sortedRecType
                 sortedGivenTypes
-      return (Expty {expr = (), typ = PT.RECORD syms uniqueType})
+      return (Expty {_expr = (), _typ = PT.RECORD syms uniqueType})
     Nothing -> throwError (show pos <> " record " <> S.unintern tyid <> " undefined")
     Just x  -> throwError (show pos <> " " <> S.unintern tyid
                                     <> " is not of type record, but of type " <> show x)
@@ -193,7 +197,7 @@ transExp' inLoop (Absyn.Let decs exps pos) = do
   currentEnv <- get
   transDec decs pos
   case exps of
-    []   -> return (Expty {expr = (), typ = PT.NIL})
+    []   -> return (Expty {_expr = (), _typ = PT.NIL})
     exps -> do
       expsTyped <- traverse (transExp' inLoop) exps
       put currentEnv
@@ -201,41 +205,41 @@ transExp' inLoop (Absyn.Let decs exps pos) = do
 
 transVar :: MonadTran m => Absyn.Var -> m VarTy
 transVar (Absyn.SimpleVar sym pos) = do
-  Trans {em = envMap} <- get
+  Trans {_em = envMap} <- get
   case envMap Map.!? sym of
     Nothing ->
       throwError (show pos <> " " <> S.unintern sym <> " is not defined")
     Just (Env.VarEntry {ty, modifiable}) -> do
       actualTy <- liftIO (actualType ty)
-      return $ VarTy { var = Env.VarEntry{ty = actualTy, modifiable = modifiable}
-                     , expr = ()
+      return $ VarTy { _var = Env.VarEntry{ty = actualTy, modifiable}
+                     , _expr = ()
                      }
     Just (Env.FunEntry {formals, result}) -> do -- the book would throw an error... might have to change
       actualTy    <- liftIO (actualType result)
       formalTypes <- liftIO (traverse actualType formals)
-      return $ VarTy { var  = Env.FunEntry { formals = formalTypes , result  = actualTy}
-                     , expr = ()
+      return $ VarTy { _var  = Env.FunEntry { formals = formalTypes , result  = actualTy}
+                     , _expr = ()
                      }
 -- this is why we need to be in state and not rader
 transVar (Absyn.Subscript arrayType expInt pos) = do
   intExpty <- transExp' False expInt -- not going to allow breaking in an array lookup!
   checkInt intExpty pos
-  VarTy {var, expr} <- transVar arrayType
-  case var of
+  VarTy {_var, _expr} <- transVar arrayType
+  case _var of
     Env.FunEntry {} -> throwError (show pos <> " tried to do array lookup on a function")
     Env.VarEntry {modifiable, ty} -> do
       actualTy <- liftIO (actualType ty)
       checkArrTyp actualTy pos
-      return (VarTy { var = Env.VarEntry { ty = actualTy , modifiable }, expr })
+      return (VarTy { _var = Env.VarEntry { ty = actualTy , modifiable }, _expr })
 
 transVar (Absyn.FieldVar recordType field pos) = do
-  VarTy {var, expr} <- transVar recordType
-  case var of
+  VarTy {_var, _expr} <- transVar recordType
+  case _var of
     Env.FunEntry {} -> throwError (show pos <> " tried to do record lookup on a function")
     Env.VarEntry {modifiable, ty} -> do
       actualTy <- liftIO (actualType ty)
       checkRecType actualTy pos
-      return (VarTy { var = Env.VarEntry { ty = actualTy, modifiable}, expr })
+      return (VarTy { _var = Env.VarEntry { ty = actualTy, modifiable}, _expr })
 
 transTy :: MonadTran m => RefMap -> Absyn.Ty -> m (PT.Type, RefMap)
 transTy refMap (Absyn.NameTy sym pos) = do
@@ -276,30 +280,30 @@ transDec decs pos = do
 transVarDecs decs pos = traverse f decs
   where
     f (Absyn.VarDec sym esc mType exp _) = do
-      Expty {typ}            <- transExp' False exp
-      trans@(Trans {em, tm}) <- get
-      let newMap = put (trans { em = Map.insert sym (Env.VarEntry {ty = typ, modifiable = True}) em })
+      Expty {_typ} <- transExp' False exp
+      trans        <- get
+      let newMap = modify (em %~ Map.insert sym (Env.VarEntry {ty = _typ, modifiable = True}))
       case mType of
         Nothing  -> newMap
         Just sty ->
-          case tm Map.!? sty of
+          case (trans^.tm) Map.!? sty of
             Nothing -> throwError (show pos <> " type " <> S.unintern sty <> " is not defined ")
             Just x
-              | x == typ  -> newMap
-              | otherwise -> throwError (show pos <> " " <> show typ <> " is not " <> show x )
+              | x == _typ  -> newMap
+              | otherwise -> throwError (show pos <> " " <> show _typ <> " is not " <> show x)
     f _ = throwError (show pos <> " violated precondition ")
 
 transFunDecsHead :: (MonadTran m, Traversable t, Show a) => t Absyn.Dec -> a -> m ()
 transFunDecsHead decs pos = traverse_ f decs
   where
     f (Absyn.FunDec name fields mtype body pos) = do
-      Trans {em, tm} <- get
-      types          <- traverse (mapFieldDec (\_ x -> x)) fields
-      let putIn x = modify (\t -> t { em = Map.insert name (Env.FunEntry types x) em })
+      trans <- get
+      types <- traverse (mapFieldDec (\_ x -> x)) fields
+      let putIn x = modify (em %~ Map.insert name (Env.FunEntry types x))
       case mtype of
         Nothing      -> putIn PT.UNIT
         Just symType ->
-          case tm Map.!? symType of
+          case (trans^.tm) Map.!? symType of
             Nothing -> throwError (show pos <> " type " <> S.unintern symType <> " is undeifned")
             Just x  -> do
               actualTy <- liftIO (actualType x)
@@ -311,11 +315,11 @@ transFunDecsBody decs pos = traverse_ f decs
   where
     makeVar n t = (n, Env.VarEntry { ty = t, modifiable = True })
     f (Absyn.FunDec name fields mtype body pos) = do
-      Trans {em, tm} <- get
-      types          <- traverse (mapFieldDec makeVar) fields
-      Expty {typ}    <- locallyInsert (transExp' False body) types
-      bodyType       <- liftIO (actualType typ)
-      case em Map.!? name of
+      trans        <- get
+      types        <- traverse (mapFieldDec makeVar) fields
+      Expty {_typ} <- locallyInsert (transExp' False body) types
+      bodyType     <- liftIO (actualType _typ)
+      case (trans^.em) Map.!? name of
         Just (Env.FunEntry {result}) -> do
           trueResultType <- liftIO (actualType result)
           checkSameTyp trueResultType bodyType pos
@@ -361,21 +365,19 @@ handleCycles decs pos = foldM (recurse Set.empty) varSet varSet >> return ()
     recurse seen set x
       | Set.member x seen = throwError (show pos <> " cycle detected " <> show seen <> " is in a cycle")
       | otherwise         = do
-          Trans {tm} <- get
-          case Map.lookup x tm of
+          trans <- get
+          case Map.lookup x (trans^.tm) of
             Just (PT.NAME v _) | Set.member v set -> recurse (Set.insert x seen) set v
             _                                     -> return (set Set.\\ seen)
 
 insertType :: MonadTran m => S.Symbol -> PT.Type -> m ()
-insertType sym tp = do
-  Trans { tm } <- get
-  modify (\t -> t {tm = Map.insert sym tp tm})
+insertType sym tp = modify (tm %~ Map.insert sym tp)
 
 -- Helper functions----------------------------------------------------------------------------
 
 mapFieldDec f (Absyn.FieldDec nameSym esc typSym pos) = do
-  Trans {tm} <- get
-  case tm Map.!? typSym of
+  trans <- get
+  case (trans^.tm) Map.!? typSym of
     Just typ -> return (f nameSym typ)
     Nothing  -> throwError (show pos <> " var " <> S.unintern nameSym
                                      <> " can't be typed " <> S.unintern typSym
@@ -385,8 +387,8 @@ getOrCreateRefMap :: MonadTran m => RefMap -> S.Symbol -> m (Ref.IORef (Maybe PT
 getOrCreateRefMap refMap sym =
   case refMap Map.!? sym of
     Nothing -> do
-      Trans {tm} <- get
-      newRef     <- liftIO (Ref.newIORef (tm Map.!? sym))
+      trans  <- get
+      newRef <- liftIO (Ref.newIORef ((trans^.tm) Map.!? sym))
       return (newRef, Map.insert sym newRef refMap)
     Just ref -> return (ref, refMap)
 
@@ -398,9 +400,8 @@ locallyInsert1 e x = locallyInsert e [x]
 
 locallyInsert :: MonadTran m => m b -> [(S.Symbol, Env.Entry)] -> m b
 locallyInsert expression xs = do
-  Trans {tm = typeMap, em = envMap} <- get
-  let vals = fmap (\(symb,_) -> (symb, envMap Map.!? symb)) xs
-
+  trans <- get
+  let vals = fmap (\(symb,_) -> (symb, (trans^.em) Map.!? symb)) xs
   traverse (uncurry changeEnvValue . fmap Just) xs
   expResult <- expression
   traverse (uncurry changeEnvValue) vals
@@ -408,11 +409,8 @@ locallyInsert expression xs = do
 
 -- Changes the Environment value... removing a value if there is none, else places the new value in the map
 changeEnvValue :: MonadTran m => S.Symbol -> Maybe Env.Entry -> m ()
-changeEnvValue symb val = do
-  trans@(Trans {em = envMap}) <- get
-  case val of
-    Nothing   -> put (trans {em = Map.delete symb envMap})
-    Just val' -> put (trans {em = Map.insert symb val' envMap})
+changeEnvValue symb Nothing    = modify (em %~ Map.delete symb)
+changeEnvValue symb (Just val) = modify (em %~ Map.insert symb val)
 
 -- this function will eventually become deprecated once we handle the intermediate stage
 handleInfixExp :: MonadTran m
@@ -427,7 +425,7 @@ handleInfixExp f inLoop left right pos = do
   right' <- transExp' inLoop right
   f left' pos
   f right' pos
-  return (Expty {expr = (), typ = PT.INT})
+  return (Expty {_expr = (), _typ = PT.INT})
 
 -- will become deprecated once we handle the intermediate stage
 handleInfixSame :: MonadTran m => Bool -> Absyn.Exp -> Absyn.Exp -> Absyn.Pos -> m Expty
@@ -435,7 +433,7 @@ handleInfixSame inLoop left right pos = do
   left'  <- transExp' inLoop left
   right' <- transExp' inLoop right
   checkSame left' right' pos
-  return (Expty {expr = (), typ = PT.INT})
+  return (Expty {_expr = (), _typ = PT.INT})
 
 handleInfixInt, handleInfixStrInt, handleInfixStr
   :: MonadTran m => Bool -> Absyn.Exp -> Absyn.Exp -> Absyn.Pos -> m Expty
@@ -444,26 +442,26 @@ handleInfixStr    = handleInfixExp checkStr
 handleInfixStrInt = handleInfixExp checkStrInt
 
 checkArr :: (Show a, MonadTranErr m) => Expty -> a -> m PT.Type
-checkArr (Expty {typ = PT.ARRAY typ _}) pos = return typ
-checkArr (Expty {typ = _})              pos = throwError (show pos <> " Array type required")
+checkArr (Expty {_typ = PT.ARRAY typ _}) pos = return typ
+checkArr (Expty {})                      pos = throwError (show pos <> " Array type required")
 
 checkInt, checkNil, checkStrInt :: (MonadTranErr m, Show a) => Expty -> a -> m ()
 
-checkInt (Expty {typ = PT.INT}) pos = return  ()
-checkInt (Expty {typ = _})      pos = throwError (show pos <> " integer required")
+checkInt (Expty {_typ = PT.INT}) pos = return  ()
+checkInt (Expty {})              pos = throwError (show pos <> " integer required")
 
-checkNil (Expty {typ = PT.NIL}) pos = return ()
-checkNil (Expty {typ = _})      pos = throwError (show pos <> " null required")
+checkNil (Expty {_typ = PT.NIL}) pos = return ()
+checkNil (Expty {_typ = _})      pos = throwError (show pos <> " null required")
 
-checkStr (Expty {typ = PT.STRING}) pos = return  ()
-checkStr (Expty {typ = _})         pos = throwError (show pos <> " string required")
+checkStr (Expty {_typ = PT.STRING}) pos = return  ()
+checkStr (Expty {_typ = _})         pos = throwError (show pos <> " string required")
 
 checkSame :: (MonadTranErr m, Show a) => Expty -> Expty -> a -> m ()
-checkSame (Expty {typ = x}) (Expty {typ = y}) = checkSameTyp x y
+checkSame (Expty {_typ = x}) (Expty {_typ = y}) = checkSameTyp x y
 
-checkStrInt (Expty {typ = PT.STRING}) pos = return  ()
-checkStrInt (Expty {typ = PT.INT})    pos = return  ()
-checkStrInt (Expty {typ = _})         pos = throwError (show pos <> " integer or string required")
+checkStrInt (Expty {_typ = PT.STRING}) pos = return  ()
+checkStrInt (Expty {_typ = PT.INT})    pos = return  ()
+checkStrInt (Expty {_typ = _})         pos = throwError (show pos <> " integer or string required")
 
 checkArrTyp (PT.ARRAY typ _) pos = return ()
 checkArrTyp _                pos = throwError (show pos <> " Array type required")
