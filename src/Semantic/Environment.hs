@@ -1,5 +1,6 @@
 module Semantic.Environment where
 
+import Frame.X86
 import qualified ProgramTypes   as PT
 import qualified AbstractSyntax as Absyn
 

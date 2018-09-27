@@ -94,7 +94,7 @@ transExp' inLoop (Absyn.Infix' left x right pos) = case x of
 transExp' inLoop (Absyn.Negation val pos) = do
   val' <- transExp' inLoop val
   checkInt val' pos
-  return (Expty {_expr = (), _typ = PT.INT})
+  return (val' & expr %~ id) -- %~  for future transactions
 
 transExp' inLoop (Absyn.Sequence [] pos) = return (Expty {_expr = (), _typ = PT.NIL})
 transExp' inLoop (Absyn.Sequence xs pos) = last <$> traverse (transExp' inLoop) xs
@@ -108,7 +108,7 @@ transExp' inLoop (Absyn.While pred body pos) = do
   body' <- transExp' True body
   checkInt pred' pos
   checkNil body' pos
-  return (Expty {_expr = (), _typ = PT.NIL})
+  return (body' & expr %~ id)
 
 transExp' inLoop (Absyn.For var esc from to body pos) = do
   from' <- transExp' inLoop from
@@ -219,7 +219,7 @@ transVar (Absyn.SimpleVar sym pos) = do
       return $ VarTy { _var  = Env.FunEntry { formals = formalTypes , result  = actualTy}
                      , _expr = ()
                      }
--- this is why we need to be in state and not rader
+-- this is why we need to be in state and not reader
 transVar (Absyn.Subscript arrayType expInt pos) = do
   intExpty <- transExp' False expInt -- not going to allow breaking in an array lookup!
   checkInt intExpty pos
@@ -246,16 +246,11 @@ transTy refMap (Absyn.NameTy sym pos) = do
   return (PT.NAME sym refType, refMap)
 transTy refMap (Absyn.ArrayTy sym pos) = do
   (refType, refMap) <- getOrCreateRefMap refMap sym
-  mtyp <- liftIO (Ref.readIORef refType)
+  mtyp      <- liftIO (Ref.readIORef refType)
+  uniqueNum <- fresh
   case mtyp of
-    Nothing -> do
-      uniqueNum <- fresh
-      return ((PT.ARRAY (PT.NAME sym refType) uniqueNum), refMap)
-    Just typ -> do
-      actualTy <- liftIO (actualType typ)
-      case actualTy of
-        PT.ARRAY _ num -> return (PT.ARRAY typ num, refMap)
-        _              -> (\f -> (PT.ARRAY typ f, refMap)) <$> fresh
+    Nothing  -> return ((PT.ARRAY (PT.NAME sym refType) uniqueNum), refMap)
+    Just typ -> return (PT.ARRAY typ uniqueNum, refMap)
 transTy refMap (Absyn.RecordTy recs) = do
   (xs,refMap) <- foldM (\ (xs, refMap) (Absyn.FieldDec name esc tySym pos) -> do
                           (refType, refMap) <- getOrCreateRefMap refMap tySym
