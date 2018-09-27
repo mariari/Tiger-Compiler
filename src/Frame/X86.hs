@@ -3,11 +3,12 @@
 
 module Frame.X86
   ( Access(..)
-  , I.name
-  , I.newFrame
-  , I.formals
-  , I.allocLocal
+  , name
+  , newFrame
+  , formals
+  , allocLocal
   , Frame
+  , FrameI(..)
   ) where
 
 import           Control.Monad(foldM)
@@ -19,12 +20,12 @@ data Access = InFrame Int
             | InReg   T.Temp
             deriving Show
 
-data F = F { _formals      :: [Access]
-           , _formalsAlloc :: Int
-           , _localsAlloc  :: Int
-           , _name         :: T.Label
-           }
-makeLenses ''F
+data Frame = Frame { formals       :: [Access]
+                   , _formalsAlloc :: Int
+                   , _localsAlloc  :: Int
+                   , name          :: T.Label
+                   } deriving Show
+makeLenses ''Frame
 
 wordSize :: Int
 wordSize = 4
@@ -34,23 +35,25 @@ allocFormal (allocd, xs) True  = return (succAlloc, InFrame (succAlloc * wordSiz
   where
     succAlloc = allocd + 1
 
-instance I.FrameFn F where
-  name = view name
+newFrame label bs = do
+  (formalsAlloc, formals) <- foldM allocFormal (0,[]) bs
+  return (Frame { formals       = formals
+                , _formalsAlloc = formalsAlloc
+                , _localsAlloc  = 0
+                , name          = label
+                })
 
-  newFrame label bs = do
-    (formalsAlloc, formals) <- foldM allocFormal (0,[]) bs
-    return (F { _formals      = formals
-              , _formalsAlloc = formalsAlloc
-              , _localsAlloc  = 0
-              , _name         = label
-              })
+allocLocal f False = (\x -> (f ,InReg x)) <$> T.newTemp
+allocLocal f True  = return (f', InFrame (f'^.localsAlloc * wordSize))
+  where
+    f' = over localsAlloc succ f
 
-instance I.Frame F Access where
-  formals = view formals
 
-  allocLocal f False = (\x -> (f ,InReg x)) <$> T.newTemp
-  allocLocal f True  = return (f', InFrame (f'^.localsAlloc * wordSize))
-    where
-      f' = over localsAlloc succ f
+instance I.FrameFn Frame where
+  name     = name
+  newFrame = newFrame
+instance I.FrameInter Frame Access where
+  formals    = formals
+  allocLocal = allocLocal
 
-type Frame = I.Frame F Access
+type FrameI = I.FrameInter Frame Access

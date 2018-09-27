@@ -6,7 +6,6 @@ import qualified Data.Map.Strict as Map -- we use Map as we need ordering on the
 
 type Unique = Int
 
-
 data Type = INT
           | STRING
           | RECORD [(Symbol, Type)] !Unique

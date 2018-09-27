@@ -8,6 +8,6 @@ class FrameFn frame where
   newFrame :: Temp.Label -> [Escape] -> IO frame
   name     :: frame -> Temp.Label
 
-class FrameFn frame => Frame frame access where
+class FrameFn frame => FrameInter frame access where
   formals    :: frame -> [access]
   allocLocal :: frame -> Escape -> IO (frame, access)
