@@ -82,24 +82,26 @@ transExp' _ (Absyn.Nil _)         = return (Expty {_expr = (), _typ = PT.NIL})
 transExp' _ (Absyn.StringLit _ _) = return (Expty {_expr = (), _typ = PT.STRING})
 transExp' e (Absyn.Var x)         = varTytoExpTy <$> transVar e x
 
-transExp' exData (Absyn.Infix' left x right pos) = case x of
-  Absyn.Minus -> handleInfixInt exData left right pos
-  Absyn.Plus  -> handleInfixInt exData left right pos
-  Absyn.Times -> handleInfixInt exData left right pos
-  Absyn.Div   -> handleInfixInt exData left right pos
-  Absyn.And   -> handleInfixInt exData left right pos
-  Absyn.Or    -> handleInfixInt exData left right pos
-  Absyn.Gt    -> handleInfixStrInt exData left right pos
-  Absyn.Ge    -> handleInfixStrInt exData left right pos
-  Absyn.Lt    -> handleInfixStrInt exData left right pos
-  Absyn.Le    -> handleInfixStrInt exData left right pos
-  Absyn.Eq    -> handleInfixSame exData left right pos
-  Absyn.Neq   -> handleInfixSame exData left right pos
+transExp' exData (Absyn.Infix' left x right pos) =
+  let f = case x of
+            Absyn.Minus -> handleInfixInt
+            Absyn.Plus  -> handleInfixInt
+            Absyn.Times -> handleInfixInt
+            Absyn.Div   -> handleInfixInt
+            Absyn.And   -> handleInfixInt
+            Absyn.Or    -> handleInfixInt
+            Absyn.Gt    -> handleInfixStrInt
+            Absyn.Ge    -> handleInfixStrInt
+            Absyn.Lt    -> handleInfixStrInt
+            Absyn.Le    -> handleInfixStrInt
+            Absyn.Eq    -> handleInfixSame
+            Absyn.Neq   -> handleInfixSame
+  in f exData left right pos
 
 transExp' exData (Absyn.Negation val pos) = do
   val' <- transExp' exData val
   checkInt val' pos
-  return (val' & expr %~ id) -- %~  for future transactions
+  return (over expr id val') -- %~  for future transactions
 
 transExp' exData (Absyn.Sequence [] pos) = return (Expty {_expr = (), _typ = PT.NIL})
 transExp' exData (Absyn.Sequence xs pos) = last <$> traverse (transExp' exData) xs
@@ -110,20 +112,20 @@ transExp' (Ex {_inLoop}) (Absyn.Break pos)
 
 transExp' exData (Absyn.While pred body pos) = do
   pred' <- transExp' exData pred
-  body' <- transExp' (exData & inLoop .~ True) body
+  body' <- transExp' (set inLoop True exData) body
   checkInt pred' pos
   checkNil body' pos
-  return (body' & expr %~ id)
+  return (over expr id body')
 
 transExp' exData (Absyn.For var esc from to body pos) = do
   from' <- transExp' exData from
   to'   <- transExp' exData to
   checkInt from' pos
   checkInt to' pos
-  body' <- locallyInsert1 (transExp' (exData & inLoop .~ True) body) -- could replace with a get and put, we if we don't mutate
+  body' <- locallyInsert1 (transExp' (set inLoop True exData) body) -- could replace with a get and put, we if we don't mutate
                           (var, Env.VarEntry {Env._ty = PT.INT, Env._modifiable = False, _access = undefined})
   checkNil body' pos -- the false makes it so if we try to modify it, it errors
-  return (body' & expr %~ id)
+  return (over expr id body')
 
 transExp' exData (Absyn.IfThenElse pred then' else' pos) = do
   pred'  <- transExp' exData pred
@@ -131,14 +133,14 @@ transExp' exData (Absyn.IfThenElse pred then' else' pos) = do
   else'' <- transExp' exData else'
   checkInt pred' pos
   checkSame then'' else'' pos
-  return (then'' & expr %~ id)
+  return (over expr id then'')
 
 transExp' exData (Absyn.IfThen pred then' pos) = do
   pred'  <- transExp' exData pred
   then'' <- transExp' exData then'
   checkInt pred' pos
   checkNil then'' pos
-  return (then'' & expr %~ id)
+  return (over expr id then'')
 
 transExp' exData (Absyn.Funcall fnSym args pos) = do
   trans <- get
@@ -161,7 +163,7 @@ transExp' exData (Absyn.Assign var toPutE pos) = do
   case envVar of
     Env.FunEntry {}                    -> throwError (show pos <> " can't set a function")
     Env.VarEntry {_modifiable = False} -> throwError (show pos <> " variable is not modifiable")
-    Env.VarEntry {_ty = varType}       -> (toPut & expr %~ id)
+    Env.VarEntry {_ty = varType}       -> (over expr id toPut)
                                           <$ checkSameTyp varType (toPut^.typ) pos
 transExp' exData (Absyn.ArrCreate tyid length content pos) = do
   Trans {_tm = typeMap} <- get
@@ -217,7 +219,7 @@ transVar exData (Absyn.SimpleVar sym pos) = do
       throwError (show pos <> " " <> S.unintern sym <> " is a function")
     Just v@(Env.VarEntry {_ty}) -> do
       actualTy <- liftIO (actualType _ty)
-      return $ VarTy { _var = v & Env.ty .~ actualTy
+      return $ VarTy { _var =  set Env.ty actualTy v
                      , _expr = ()
                      }
 
@@ -231,7 +233,7 @@ transVar exData (Absyn.Subscript arrayType expInt pos) = do
     v@(Env.VarEntry {_ty}) -> do
       actualTy <- liftIO (actualType _ty)
       checkArrTyp actualTy pos
-      return (VarTy { _expr, _var = v & Env.ty .~ actualTy })
+      return (VarTy { _expr, _var = set Env.ty actualTy v })
 
 transVar exData (Absyn.FieldVar recordType field pos) = do
   VarTy {_var, _expr} <- transVar exData recordType
@@ -240,7 +242,7 @@ transVar exData (Absyn.FieldVar recordType field pos) = do
     v@Env.VarEntry {_ty} -> do
       actualTy <- liftIO (actualType _ty)
       checkRecType actualTy pos
-      return (VarTy { _expr, _var = v & Env.ty .~ actualTy })
+      return (VarTy { _expr, _var = set Env.ty actualTy v })
 
 transTy :: MonadTran m => RefMap -> Absyn.Ty -> m (PT.Type, RefMap)
 transTy refMap (Absyn.NameTy sym pos) = do
@@ -278,7 +280,7 @@ transVarDecs exData decs pos = traverse f decs
     f (Absyn.VarDec sym esc mType exp _) = do
       Expty {_typ} <- transExp' exData exp
       trans        <- get
-      let newMap = modify (em %~ Map.insert sym (Env.VarEntry {_ty = _typ, _modifiable = True, _access = undefined}))
+      let newMap = modify (over em (Map.insert sym (Env.VarEntry {_ty = _typ, _modifiable = True, _access = undefined})))
       case mType of
         Nothing  -> newMap
         Just sty ->

@@ -39,7 +39,7 @@ allocLocal :: (MonadIO m, MonadError String m) => Level -> Bool -> m Access
 allocLocal TopLevel _ = throwError ("Tried to allocate on the top level")
 allocLocal lvl esc = do
   (fra, access) <- liftIO (F.allocLocal (_frame lvl) esc)
-  return (Access (lvl & frame .~ fra) access)
+  return (Access (set frame fra lvl) access)
 
 formals :: Level -> [Access]
 formals TopLevel = []
