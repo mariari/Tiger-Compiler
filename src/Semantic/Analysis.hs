@@ -107,7 +107,7 @@ transExp' exData (Absyn.Sequence [] pos) = return (Expty {_expr = (), _typ = PT.
 transExp' exData (Absyn.Sequence xs pos) = last <$> traverse (transExp' exData) xs
 
 transExp' (Ex {_inLoop}) (Absyn.Break pos)
-  | _inLoop    = return (Expty {_expr = (), _typ = PT.NIL})
+  | _inLoop   = return (Expty {_expr = (), _typ = PT.NIL})
   | otherwise = throwError (show pos <> " break needs to be used inside a loop")
 
 transExp' exData (Absyn.While pred body pos) = do
@@ -121,8 +121,8 @@ transExp' exData (Absyn.For var esc from to body pos) = do
   from' <- transExp' exData from
   to'   <- transExp' exData to
   checkInt from' pos
-  checkInt to' pos
-  body' <- locallyInsert1 (transExp' (set inLoop True exData) body) -- could replace with a get and put, we if we don't mutate
+  checkInt to' pos -- line below :: could replace with a get and put, we if we don't mutate
+  body' <- locallyInsert1 (transExp' (set inLoop True exData) body)
                           (var, Env.VarEntry {Env._ty = PT.INT, Env._modifiable = False, _access = undefined})
   checkNil body' pos -- the false makes it so if we try to modify it, it errors
   return (over expr id body')
