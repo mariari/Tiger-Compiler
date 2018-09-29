@@ -3,10 +3,10 @@
 
 module Frame.X86
   ( Access(..)
-  , name
-  , newFrame
-  , formals
-  , allocLocal
+  , I.name
+  , I.newFrame
+  , I.formals
+  , I.allocLocal
   , Frame
   , FrameI(..)
   ) where
@@ -35,25 +35,21 @@ allocFormal (allocd, xs) True  = return (succAlloc, InFrame (succAlloc * wordSiz
   where
     succAlloc = allocd + 1
 
-newFrame label bs = do
-  (formalsAlloc, formals) <- foldM allocFormal (0,[]) bs
-  return (Frame { formals       = formals
-                , _formalsAlloc = formalsAlloc
-                , _localsAlloc  = 0
-                , name          = label
-                })
-
-allocLocal f False = (\x -> (f ,InReg x)) <$> T.newTemp
-allocLocal f True  = return (f', InFrame (f'^.localsAlloc * wordSize))
-  where
-    f' = over localsAlloc succ f
-
-
 instance I.FrameFn Frame where
   name     = name
-  newFrame = newFrame
+  newFrame label bs = do
+    (formalsAlloc, formals) <- foldM allocFormal (0,[]) bs
+    return (Frame { formals       = formals
+                  , _formalsAlloc = formalsAlloc
+                  , _localsAlloc  = 0
+                  , name          = label
+                  })
+
 instance I.FrameInter Frame Access where
   formals    = formals
-  allocLocal = allocLocal
+  allocLocal f False = (\x -> (f ,InReg x)) <$> T.newTemp
+  allocLocal f True  = return (f', InFrame (f'^.localsAlloc * wordSize))
+    where
+      f' = over localsAlloc succ f
 
 type FrameI = I.FrameInter Frame Access

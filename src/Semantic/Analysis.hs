@@ -8,6 +8,7 @@ import qualified ProgramTypes         as PT
 import qualified AbstractSyntax       as Absyn
 import qualified Semantic.Environment as Env
 import qualified Semantic.Translate   as T
+import qualified Semantic.Temp        as Temp
 
 import           Control.Lens
 import           Data.Maybe
@@ -121,9 +122,10 @@ transExp' exData (Absyn.For var esc from to body pos) = do
   from' <- transExp' exData from
   to'   <- transExp' exData to
   checkInt from' pos
-  checkInt to' pos -- line below :: could replace with a get and put, we if we don't mutate
+  checkInt to' pos
+  access <- allocLocal exData esc
   body' <- locallyInsert1 (transExp' (set inLoop True exData) body)
-                          (var, Env.VarEntry {Env._ty = PT.INT, Env._modifiable = False, _access = undefined})
+                          (var, Env.VarEntry {Env._ty = PT.INT, Env._modifiable = False, _access = access})
   checkNil body' pos -- the false makes it so if we try to modify it, it errors
   return (over expr id body')
 
@@ -277,10 +279,11 @@ transDec exData decs pos = do
 
 transVarDecs exData decs pos = traverse f decs
   where
-    f (Absyn.VarDec sym esc mType exp _) = do
+    f (Absyn.VarDec sym escRef mType exp _) = do
       Expty {_typ} <- transExp' exData exp
       trans        <- get
-      let newMap = modify (over em (Map.insert sym (Env.VarEntry {_ty = _typ, _modifiable = True, _access = undefined})))
+      access       <- allocLocal exData escRef
+      let newMap = modify (over em (Map.insert sym (Env.VarEntry {_ty = _typ, _modifiable = True, _access = access})))
       case mType of
         Nothing  -> newMap
         Just sty ->
@@ -296,8 +299,12 @@ transFunDecsHead exData decs pos = traverse_ f decs
   where
     f (Absyn.FunDec name fields mtype body pos) = do
       trans <- get
-      types <- traverse (mapFieldDec (\_ x -> x)) fields
-      let putIn x = modify (em %~ Map.insert name (Env.FunEntry types x undefined))
+      types <- traverse (mapFieldDec (\_ x _ -> x)) fields
+      let putIn x = do
+            label   <- liftIO Temp.newLabel
+            escapes <- liftIO $ traverse (\(Absyn.FieldDec _ esc _ _) -> Ref.readIORef esc) fields
+            lvl     <- liftIO $ T.newLevel (exData^.level) label escapes
+            modify (over em (Map.insert name (Env.FunEntry types x lvl)))
       case mtype of
         Nothing      -> putIn PT.UNIT
         Just symType ->
@@ -311,14 +318,16 @@ transFunDecsHead exData decs pos = traverse_ f decs
 transFunDecsBody :: (MonadTran m, Traversable t, Show a) => ExtraData -> t Absyn.Dec -> a -> m ()
 transFunDecsBody exData decs pos = traverse_ f decs
   where
-    makeVar n t = (n, Env.VarEntry { _ty = t, _modifiable = True, _access = undefined })
+    makeVar n t escRef = do
+      access <- allocLocal exData escRef
+      return (n, Env.VarEntry { _ty = t, _modifiable = True, _access = access})
     f (Absyn.FunDec name fields mtype body pos) = do
-      trans        <- get
-      types        <- traverse (mapFieldDec makeVar) fields
-      Expty {_typ} <- locallyInsert (transExp' exData body) types
-      bodyType     <- liftIO (actualType _typ)
+      trans <- get
       case trans^.em.at name of
-        Just (Env.FunEntry {_result}) -> do
+        Just (Env.FunEntry {_result, _level}) -> do
+          types          <- traverse (mapFieldDecImp makeVar) fields
+          Expty {_typ}   <- locallyInsert (transExp' exData body) types
+          bodyType       <- liftIO (actualType _typ)
           trueResultType <- liftIO (actualType _result)
           checkSameTyp trueResultType bodyType pos
         _ -> throwError (show pos <> " transFunDecsHead did not put the function in the map")
@@ -369,17 +378,25 @@ handleCycles decs pos = foldM (recurse Set.empty) varSet varSet >> return ()
             _                                     -> return (set Set.\\ seen)
 
 insertType :: MonadTran m => S.Symbol -> PT.Type -> m ()
-insertType sym tp = modify (tm %~ Map.insert sym tp)
+insertType sym tp = modify (over tm (Map.insert sym tp))
 
 -- Helper functions----------------------------------------------------------------------------
 
-mapFieldDec f (Absyn.FieldDec nameSym esc typSym pos) = do
+allocLocal :: (MonadIO m, MonadError String m) => ExtraData -> Ref.IORef Bool -> m T.Access
+allocLocal (Ex {_level}) escRef = do
+  esc <- liftIO (Ref.readIORef escRef)
+  T.allocLocal _level esc
+
+
+mapFieldDecImp f (Absyn.FieldDec nameSym esc typSym pos) = do
   trans <- get
   case trans^.tm^.at typSym of
-    Just typ -> return (f nameSym typ)
+    Just typ -> f nameSym typ esc
     Nothing  -> throwError (show pos <> " var " <> S.unintern nameSym
                                      <> " can't be typed " <> S.unintern typSym
                                      <> " is undefined" )
+
+mapFieldDec f = mapFieldDecImp (\x y z -> return (f x y z))
 
 getOrCreateRefMap :: MonadTran m => RefMap -> S.Symbol -> m (Ref.IORef (Maybe PT.Type), RefMap)
 getOrCreateRefMap refMap sym =
@@ -407,8 +424,8 @@ locallyInsert expression xs = do
 
 -- Changes the Environment value... removing a value if there is none, else places the new value in the map
 changeEnvValue :: MonadTran m => S.Symbol -> Maybe Env.Entry -> m ()
-changeEnvValue symb Nothing    = modify (em %~ Map.delete symb)
-changeEnvValue symb (Just val) = modify (em %~ Map.insert symb val)
+changeEnvValue symb Nothing    = modify (over em (Map.delete symb))
+changeEnvValue symb (Just val) = modify (over em (Map.insert symb val))
 
 -- this function will eventually become deprecated once we handle the intermediate stage
 handleInfixExp :: MonadTran m

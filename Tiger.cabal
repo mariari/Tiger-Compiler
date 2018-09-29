@@ -33,6 +33,12 @@ library
     , Semantic.Environment
     , Semantic.Analysis
     , Data.IORef.Show
+    , Data.Unique.Show
+    , Frame.Interface
+    , Frame.X86
+    , Semantic.Temp
+    , Semantic.Translate
+
   other-modules:
       Paths_Tiger
   hs-source-dirs:

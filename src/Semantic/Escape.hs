@@ -30,7 +30,7 @@ traverseExp md (Abs.IfThen p t    _)     = traverseExp md p   >> traverseExp md 
 traverseExp md (Abs.IfThenElse p t e  _) = traverseExp md p   >> traverseExp md t >> traverseExp md e
 
 traverseExp md (Abs.Let decs exps _) = do
-  newMd <- foldM traverseDecs md decs
+  newMd <- foldM traverseDec md decs
   traverse_ (traverseExp newMd) exps
 
 traverseExp (m,d) (Abs.For sym esc from to body _) = do
@@ -47,16 +47,16 @@ traverseVar (env,depth) (Abs.SimpleVar sym _) =
     Just (vDepth, esc) | depth > vDepth -> R.writeIORef esc True
     _                                   -> return ()
 
-traverseDecs :: (EscEnvMap, Depth) -> Abs.Dec -> IO (EscEnvMap,Depth)
-traverseDecs md (Abs.TypeDec {}) = return md
+traverseDec :: (EscEnvMap, Depth) -> Abs.Dec -> IO (EscEnvMap,Depth)
+traverseDec md (Abs.TypeDec {}) = return md
 
-traverseDecs (env,d) (Abs.VarDec sym esc _ exp _) = do
+traverseDec (env,d) (Abs.VarDec sym esc _ exp _) = do
   R.writeIORef esc False
   traverseExp (env,d) exp
   return (Map.insert sym (d,esc) env ,d)
 
 -- functions can't escape!
-traverseDecs (env,d) (Abs.FunDec _ fields _ body _) = do
+traverseDec (env,d) (Abs.FunDec _ fields _ body _) = do
   let newDepth = d + 1
   let bodyEnv  = foldr (\(Abs.FieldDec sym esc _ _) -> Map.insert sym (newDepth, esc)) env fields
   traverseExp (bodyEnv,newDepth) body
