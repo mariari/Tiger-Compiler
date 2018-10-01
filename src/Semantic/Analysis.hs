@@ -38,8 +38,8 @@ data VarTy = VarTy { _var  :: !Env.Entry
 
 varTytoExpTy (VarTy {_var, _expr}) =
   let _typ = case _var of
-        Env.VarEntry {_ty = ty}     -> ty
-        Env.FunEntry {_result = ty} -> ty
+               Env.VarEntry {_ty = ty}     -> ty
+               Env.FunEntry {_result = ty} -> ty
   in Expty {_expr, _typ}
 
 data Translation = Trans { _tm   :: !Env.TypeMap
@@ -102,7 +102,7 @@ transExp' exData (Absyn.Infix' left x right pos) =
 transExp' exData (Absyn.Negation val pos) = do
   val' <- transExp' exData val
   checkInt val' pos
-  return (over expr id val') -- %~  for future transactions
+  return (over expr id val') -- over for future transactions
 
 transExp' exData (Absyn.Sequence [] pos) = return (Expty {_expr = (), _typ = PT.NIL})
 transExp' exData (Absyn.Sequence xs pos) = last <$> traverse (transExp' exData) xs
@@ -125,7 +125,7 @@ transExp' exData (Absyn.For var esc from to body pos) = do
   checkInt to' pos
   access <- allocLocal exData esc
   body' <- locallyInsert1 (transExp' (set inLoop True exData) body)
-                          (var, Env.VarEntry {Env._ty = PT.INT, Env._modifiable = False, _access = access})
+                          (var, Env.VarEntry {_ty = PT.INT, _modifiable = False, _access = access})
   checkNil body' pos -- the false makes it so if we try to modify it, it errors
   return (over expr id body')
 
@@ -225,7 +225,6 @@ transVar exData (Absyn.SimpleVar sym pos) = do
                      , _expr = ()
                      }
 
--- this is why we need to be in state and not reader
 transVar exData (Absyn.Subscript arrayType expInt pos) = do
   intExpty <- transExp' exData expInt -- not going to allow breaking in an array lookup!
   checkInt intExpty pos
@@ -283,7 +282,13 @@ transVarDecs exData decs pos = traverse f decs
       Expty {_typ} <- transExp' exData exp
       trans        <- get
       access       <- allocLocal exData escRef
-      let newMap = modify (over em (Map.insert sym (Env.VarEntry {_ty = _typ, _modifiable = True, _access = access})))
+      let newMap = modify
+                 . over em
+                 . Map.insert sym
+                 $ Env.VarEntry { _ty         = _typ
+                                , _modifiable = True
+                                , _access     = access
+                                }
       case mType of
         Nothing  -> newMap
         Just sty ->
@@ -386,7 +391,6 @@ allocLocal :: (MonadIO m, MonadError String m) => ExtraData -> Ref.IORef Bool ->
 allocLocal (Ex {_level}) escRef = do
   esc <- liftIO (Ref.readIORef escRef)
   T.allocLocal _level esc
-
 
 mapFieldDecImp f (Absyn.FieldDec nameSym esc typSym pos) = do
   trans <- get
