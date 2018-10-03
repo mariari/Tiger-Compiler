@@ -47,7 +47,7 @@ instance I.FrameFn Frame where
 
 instance I.FrameInter Frame Access where
   formals    = formals
-  allocLocal f False = (\x -> (f ,InReg x)) <$> T.newTemp
+  allocLocal f False = (\x -> (f, InReg x)) <$> T.newTemp
   allocLocal f True  = return (f', InFrame (f'^.localsAlloc * wordSize))
     where
       f' = over localsAlloc succ f

@@ -4,6 +4,7 @@ module Semantic.Translate
   ( Access
   , Level
   , outerMost
+  , mainLevel
   , newLevel
   , allocLocal
   , simpleVar
@@ -37,6 +38,9 @@ data Exp = Ex Tree.Exp  -- Expression
 
 outerMost :: Level
 outerMost = TopLevel
+
+mainLevel :: IO Level
+mainLevel = newLevel outerMost (Temp.nameLabel "Tiger_Main") []
 
 newLevel :: Level -> Temp.Label -> [Escape] -> IO Level
 newLevel parent name formals = Level parent <$> F.newFrame name formals

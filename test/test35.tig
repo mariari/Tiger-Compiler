@@ -1,0 +1,5 @@
+let /* error : formals are more then actuals */
+	function g (a:int , b:string):int = a
+in
+	g("one")
+end

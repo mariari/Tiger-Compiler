@@ -4,6 +4,7 @@
 
 module Semantic.Analysis where
 
+import TigerParser
 import qualified ProgramTypes         as PT
 import qualified AbstractSyntax       as Absyn
 import qualified Semantic.Environment as Env
@@ -72,7 +73,8 @@ runMonadTran tm em f = runExceptT (runStateT f trans)
 
 transExp :: Env.TypeMap -> Env.EntryMap -> Absyn.Exp -> IO Expty
 transExp tm em absyn = do
-  x <- runMonadTran tm em (transExp' (Ex {_inLoop = False, _level = T.outerMost}) absyn)
+  mainLevel <- T.mainLevel
+  x <- runMonadTran tm em (transExp' (Ex {_inLoop = False, _level = mainLevel}) absyn)
   case x of
     Left a          -> error a
     Right (expt,tl) -> return expt
@@ -114,8 +116,8 @@ transExp' (Ex {_inLoop}) (Absyn.Break pos)
 transExp' exData (Absyn.While pred body pos) = do
   pred' <- transExp' exData pred
   body' <- transExp' (set inLoop True exData) body
-  checkInt pred' pos
-  checkNil body' pos
+  checkInt     pred' pos
+  checkNilUnit body' pos
   return (over expr id body')
 
 transExp' exData (Absyn.For var esc from to body pos) = do
@@ -126,7 +128,7 @@ transExp' exData (Absyn.For var esc from to body pos) = do
   (exData, access) <- allocLocal exData esc
   body' <- locallyInsert1 (transExp' (set inLoop True exData) body)
                           (var, Env.VarEntry {_ty = PT.INT, _modifiable = False, _access = access})
-  checkNil body' pos -- the false makes it so if we try to modify it, it errors
+  checkNilUnit body' pos -- the false makes it so if we try to modify it, it errors
   return (over expr id body')
 
 transExp' exData (Absyn.IfThenElse pred then' else' pos) = do
@@ -141,7 +143,7 @@ transExp' exData (Absyn.IfThen pred then' pos) = do
   pred'  <- transExp' exData pred
   then'' <- transExp' exData then'
   checkInt pred' pos
-  checkNil then'' pos
+  checkNilUnit then'' pos
   return (over expr id then'')
 
 transExp' exData (Absyn.Funcall fnSym args pos) = do
@@ -165,7 +167,7 @@ transExp' exData (Absyn.Assign var toPutE pos) = do
   case envVar of
     Env.FunEntry {}                    -> throwError (show pos <> " can't set a function")
     Env.VarEntry {_modifiable = False} -> throwError (show pos <> " variable is not modifiable")
-    Env.VarEntry {_ty = varType}       -> (over expr id toPut)
+    Env.VarEntry {_ty = varType}       -> Expty {_expr = (), _typ = PT.UNIT}
                                           <$ checkSameTyp varType (toPut^.typ) pos
 transExp' exData (Absyn.ArrCreate tyid length content pos) = do
   Trans {_tm = typeMap} <- get
@@ -233,8 +235,9 @@ transVar exData (Absyn.Subscript arrayType expInt pos) = do
     Env.FunEntry {} -> throwError (show pos <> " tried to do array lookup on a function")
     v@(Env.VarEntry {_ty}) -> do
       actualTy <- liftIO (actualType _ty)
-      checkArrTyp actualTy pos
-      return (VarTy { _expr, _var = set Env.ty actualTy v })
+      ty       <- checkArrTyp actualTy pos
+      aTy      <- liftIO (actualType ty)
+      return (VarTy { _expr, _var = set Env.ty aTy v })
 
 transVar exData (Absyn.FieldVar recordType field pos) = do
   VarTy {_var, _expr} <- transVar exData recordType
@@ -479,8 +482,12 @@ checkInt, checkNil, checkStrInt :: (MonadTranErr m, Show a) => Expty -> a -> m (
 checkInt (Expty {_typ = PT.INT}) pos = return  ()
 checkInt (Expty {})              pos = throwError (show pos <> " integer required")
 
+checkNilUnit (Expty {_typ = PT.UNIT}) pos = return ()
+checkNilUnit (Expty {_typ = PT.NIL})  pos = return ()
+checkNilUnit (Expty {_typ = _})       pos = throwError (show pos <> " nil or unit required")
+
 checkNil (Expty {_typ = PT.NIL}) pos = return ()
-checkNil (Expty {_typ = _})      pos = throwError (show pos <> " null required")
+checkNil (Expty {_typ = _})      pos = throwError (show pos <> " nil required")
 
 checkStr (Expty {_typ = PT.STRING}) pos = return  ()
 checkStr (Expty {_typ = _})         pos = throwError (show pos <> " string required")
@@ -492,7 +499,7 @@ checkStrInt (Expty {_typ = PT.STRING}) pos = return  ()
 checkStrInt (Expty {_typ = PT.INT})    pos = return  ()
 checkStrInt (Expty {_typ = _})         pos = throwError (show pos <> " integer or string required")
 
-checkArrTyp (PT.ARRAY typ _) pos = return ()
+checkArrTyp (PT.ARRAY typ _) pos = return typ
 checkArrTyp _                pos = throwError (show pos <> " Array type required")
 
 checkRecType (PT.RECORD _ _) pos = return ()

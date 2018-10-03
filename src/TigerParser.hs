@@ -63,7 +63,14 @@ getLineCol = fmap sourceLineCol getPosition
 symbol :: ParserIO S.Symbol
 symbol = S.intern <$> identifier
 
-parseTigerLine = runParserT expression () ""
+parseTigerLine = parseTigerLine' ""
+
+parseTigerLine' = runParserT (whiteSpace >> expression) ()
+
+parseTigerFile fname = do
+  input <- readFile fname
+  parseTigerLine' fname input
+
 
 expression :: ParserIO Exp
 expression = buildExpressionParser optable expression' <?> "Exp"

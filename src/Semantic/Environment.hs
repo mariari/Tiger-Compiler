@@ -33,6 +33,7 @@ baseTmap = Map.fromList [(S.intern "int",    PT.INT)
 
 baseEmap :: EntryMap
 baseEmap = Map.fromList [(S.intern "print",     FunEntry [PT.STRING] PT.UNIT   Trans.outerMost)
+                        ,(S.intern "print_int", FunEntry [PT.INT]    PT.UNIT   Trans.outerMost)
                         ,(S.intern "flush",     FunEntry []          PT.UNIT   Trans.outerMost)
                         ,(S.intern "getchar",   FunEntry []          PT.STRING Trans.outerMost)
                         ,(S.intern "ord",       FunEntry [PT.STRING] PT.INT    Trans.outerMost)
