@@ -123,7 +123,7 @@ transExp' exData (Absyn.For var esc from to body pos) = do
   to'   <- transExp' exData to
   checkInt from' pos
   checkInt to' pos
-  access <- allocLocal exData esc
+  (exData, access) <- allocLocal exData esc
   body' <- locallyInsert1 (transExp' (set inLoop True exData) body)
                           (var, Env.VarEntry {_ty = PT.INT, _modifiable = False, _access = access})
   checkNil body' pos -- the false makes it so if we try to modify it, it errors
@@ -279,9 +279,9 @@ transDec exData decs pos = do
 transVarDecs exData decs pos = traverse f decs
   where
     f (Absyn.VarDec sym escRef mType exp _) = do
-      Expty {_typ} <- transExp' exData exp
-      trans        <- get
-      access       <- allocLocal exData escRef
+      Expty {_typ}     <- transExp' exData exp
+      trans            <- get
+      (exData, access) <- allocLocal exData escRef
       let newMap = modify
                  . over em
                  . Map.insert sym
@@ -323,20 +323,29 @@ transFunDecsHead exData decs pos = traverse_ f decs
 transFunDecsBody :: (MonadTran m, Traversable t, Show a) => ExtraData -> t Absyn.Dec -> a -> m ()
 transFunDecsBody exData decs pos = traverse_ f decs
   where
-    makeVar n t escRef = do
-      access <- allocLocal exData escRef
-      return (n, Env.VarEntry { _ty = t, _modifiable = True, _access = access})
     f (Absyn.FunDec name fields mtype body pos) = do
       trans <- get
       case trans^.em.at name of
         Just (Env.FunEntry {_result, _level}) -> do
-          types          <- traverse (mapFieldDecImp makeVar) fields
-          Expty {_typ}   <- locallyInsert (transExp' exData body) types
-          bodyType       <- liftIO (actualType _typ)
-          trueResultType <- liftIO (actualType _result)
+          (exData, types) <- allocFields exData fields
+          Expty {_typ}    <- locallyInsert (transExp' exData body) types
+          bodyType        <- liftIO (actualType _typ)
+          trueResultType  <- liftIO (actualType _result)
           checkSameTyp trueResultType bodyType pos
         _ -> throwError (show pos <> " transFunDecsHead did not put the function in the map")
     f _ = throwError (show pos <> " internal precondition violated at transFunDecBody")
+
+makeVar exData n t escRef = do
+  (exData, access) <- allocLocal exData escRef
+  return (exData, n, Env.VarEntry { _ty = t, _modifiable = True, _access = access})
+
+allocFields exData fields = do
+  (newExData, vars) <- foldM f (exData,[]) fields
+  return (newExData, reverse vars)
+  where
+    f (exData, vars) field = do
+      (exData', name, var) <- mapFieldDecImp (makeVar exData) field
+      return (exData', (name, var) : vars)
 
 transTypeDecs :: MonadTran m => ExtraData -> [Absyn.Dec] -> Absyn.Pos -> m ()
 transTypeDecs exData decs pos = foldM handle1 refMap decs >>= allDefined >> handleCycles decs pos
@@ -387,10 +396,11 @@ insertType sym tp = modify (over tm (Map.insert sym tp))
 
 -- Helper functions----------------------------------------------------------------------------
 
-allocLocal :: (MonadIO m, MonadError String m) => ExtraData -> Ref.IORef Bool -> m T.Access
-allocLocal (Ex {_level}) escRef = do
+allocLocal :: (MonadIO m, MonadError String m) => ExtraData -> Ref.IORef Bool -> m (ExtraData,T.Access)
+allocLocal (Ex inLoop level) escRef = do
   esc <- liftIO (Ref.readIORef escRef)
-  T.allocLocal _level esc
+  (level', access)<- T.allocLocal level esc
+  return (Ex inLoop level', access)
 
 mapFieldDecImp f (Absyn.FieldDec nameSym esc typSym pos) = do
   trans <- get

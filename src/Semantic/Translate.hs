@@ -6,6 +6,7 @@ module Semantic.Translate
   , outerMost
   , newLevel
   , allocLocal
+  , simpleVar
   ) where
 
 import qualified Frame.X86        as F
@@ -14,6 +15,7 @@ import qualified Semantic.IR.Tree as Tree
 
 import Control.Lens hiding(Level)
 import Control.Monad.Except
+import Data.Monoid((<>))
 
 type Escape = Bool
 
@@ -39,11 +41,12 @@ outerMost = TopLevel
 newLevel :: Level -> Temp.Label -> [Escape] -> IO Level
 newLevel parent name formals = Level parent <$> F.newFrame name formals
 
-allocLocal :: (MonadIO m, MonadError String m) => Level -> Bool -> m Access
+allocLocal :: (MonadIO m, MonadError String m) => Level -> Bool -> m (Level, Access)
 allocLocal TopLevel _ = throwError ("Tried to allocate on the top level")
 allocLocal lvl esc = do
   (fra, access) <- liftIO (F.allocLocal (_frame lvl) esc)
-  return (Access (set frame fra lvl) access)
+  let newLevel = (set frame fra lvl)
+  return (newLevel, Access newLevel access)
 
 formals :: Level -> [Access]
 formals TopLevel = []
@@ -69,3 +72,21 @@ unEx (Cx genstmt) = do
                             , Tree.Label t
                             ])
                      (Tree.Temp r)
+
+unNx (Nx s) = return s
+unNx (Ex e) = return $ Tree.Exp e
+unNx (Cx genstmt) = do
+  t <- Temp.newLabel
+  f <- Temp.newLabel
+  return $ exSeq [ genstmt t f, Tree.Label f, Tree.Label t ]
+
+unCx :: (MonadError String m) => Exp -> Temp.Label -> Temp.Label -> m Tree.Stmt
+unCx (Cx x)              t f = return $ x t f
+unCx (Ex (Tree.Const 0)) t f = return $ Tree.Jump (Tree.Name f) [f] -- 0 for false
+unCx (Ex (Tree.Const _)) t f = return $ Tree.Jump (Tree.Name t) [t] -- others for true!
+unCx (Ex e)              t f = return $ Tree.CJump Tree.Ne (Tree.Const 0) e t f
+unCx (Nx _)              _ _ = throwError ( " The impossible happened!"
+                                         <> " Translate.unCx received an Nx!" )
+
+simpleVar :: Access -> Level -> Exp
+simpleVar = undefined
