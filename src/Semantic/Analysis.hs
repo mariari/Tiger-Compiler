@@ -195,7 +195,10 @@ transExp' exData (Absyn.RecCreate tyid givens pos) = do
                                        return (sym, e^.typ, pos))
                                    sortedGivens
       zipWithM_ (\ (_, recType)
-                   (_, givenType, p) -> checkSameTyp recType givenType p)
+                   (_, givenType, p) -> do
+                    recTyp <- liftIO (actualType recType)
+                    gvnTyp <- liftIO (actualType givenType)
+                    checkSameTyp recTyp gvnTyp p)
                 sortedRecType
                 sortedGivenTypes
       return (Expty {_expr = (), _typ = PT.RECORD syms uniqueType})
@@ -245,8 +248,12 @@ transVar exData (Absyn.FieldVar recordType field pos) = do
     Env.FunEntry {} -> throwError (show pos <> " tried to do record lookup on a function")
     v@Env.VarEntry {_ty} -> do
       actualTy <- liftIO (actualType _ty)
-      checkRecType actualTy pos
-      return (VarTy { _expr, _var = set Env.ty actualTy v })
+      lst <- checkRecType actualTy pos
+      case List.find (\(sym,_) -> sym == field) lst of
+        Just (_, ty) -> do
+          aTy <- liftIO (actualType ty)
+          return (VarTy { _expr, _var = set Env.ty aTy v })
+        Nothing -> throwError (show pos <> " Field in " <> S.unintern field <> "Record does not exist")
 
 transTy :: MonadTran m => RefMap -> Absyn.Ty -> m (PT.Type, RefMap)
 transTy refMap (Absyn.NameTy sym pos) = do
@@ -502,8 +509,8 @@ checkStrInt (Expty {_typ = _})         pos = throwError (show pos <> " integer o
 checkArrTyp (PT.ARRAY typ _) pos = return typ
 checkArrTyp _                pos = throwError (show pos <> " Array type required")
 
-checkRecType (PT.RECORD _ _) pos = return ()
-checkRecType _               pos = throwError (show pos <> " record type required")
+checkRecType (PT.RECORD xs _) pos = return xs
+checkRecType _                pos = throwError (show pos <> " record type required")
 
 -- A variant of checkSame that works on PT.Type
 checkSameTyp :: (MonadTranErr m, Show a) => PT.Type -> PT.Type -> a -> m ()
