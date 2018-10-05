@@ -35,11 +35,13 @@ library
     , Data.IORef.Show
     , Data.Unique.Show
     , Frame.Interface
+    , Frame.CurrentMachine
     , Frame.X86
     , Semantic.Temp
     , Semantic.Translate
     , Semantic.IR.Tree
-
+    , App.Environment
+    , App.Initialize
   other-modules:
       Paths_Tiger
   hs-source-dirs:

@@ -4,7 +4,8 @@
 
 module Semantic.Analysis where
 
-import TigerParser
+--import TigerParser
+import App.Environment
 import qualified ProgramTypes         as PT
 import qualified AbstractSyntax       as Absyn
 import qualified Semantic.Environment as Env
@@ -13,7 +14,7 @@ import qualified Semantic.Temp        as Temp
 
 import           Control.Lens
 import           Data.Maybe
-import           Data.Monoid((<>))
+import           Data.Semigroup((<>))
 import qualified Data.IORef      as Ref
 import qualified Data.List       as List
 import qualified Data.Symbol     as S
@@ -62,19 +63,23 @@ fresh = do
   return (trans^.uniq)
 
 type MonadTranErr m = (MonadError String m)
-type MonadTran    m = (MonadState  Translation m, MonadTranErr m, MonadIO m) -- IO is for refs only
+type MonadTran    m = ( MonadState Translation m
+                      , MonadTranErr m
+                      , MonadIO m
+                      , MonadReader Env m) -- IO is for refs only
 
 runMonadTran :: Env.TypeMap
              -> Env.EntryMap
-             -> (StateT Translation (ExceptT e IO)) a
+             -> Env
+             -> (StateT Translation (ExceptT e (ReaderT Env IO))) a
              -> IO (Either e (a, Translation))
-runMonadTran tm em f = runExceptT (runStateT f trans)
+runMonadTran tm em env f = runReaderT (runExceptT (runStateT f trans)) env
   where trans = Trans {_tm = tm, _em = em, _uniq = 0}
 
-transExp :: Env.TypeMap -> Env.EntryMap -> Absyn.Exp -> IO Expty
-transExp tm em absyn = do
+transExp :: Env.TypeMap -> Env.EntryMap -> Absyn.Exp -> Env -> IO Expty
+transExp tm em absyn env = do
   mainLevel <- T.mainLevel
-  x <- runMonadTran tm em (transExp' (Ex {_inLoop = False, _level = mainLevel}) absyn)
+  x <- runMonadTran tm em env (transExp' (Ex {_inLoop = False, _level = mainLevel}) absyn)
   case x of
     Left a          -> error a
     Right (expt,tl) -> return expt

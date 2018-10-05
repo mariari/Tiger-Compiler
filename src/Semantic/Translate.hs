@@ -1,5 +1,8 @@
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE TemplateHaskell #-}
-
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE FunctionalDependencies #-}
 module Semantic.Translate
   ( Access
   , Level
@@ -10,14 +13,16 @@ module Semantic.Translate
   , simpleVar
   ) where
 
-import qualified Frame.X86        as F
+import qualified Frame.CurrentMachine as F
 import qualified Semantic.Temp    as Temp
 import qualified Semantic.IR.Tree as Tree
+import App.Environment
 
-import Control.Lens hiding(Level)
 import Data.Unique.Show
 import Control.Monad.Except
-import Data.Monoid((<>))
+import Control.Monad.Reader
+import Data.Semigroup((<>))
+import Control.Lens hiding(Level)
 
 type Escape = Bool
 
@@ -60,11 +65,12 @@ allocLocal lvl esc = do
 -- tail to remove the static link
 formals :: Level -> [Access]
 formals TopLevel = []
-formals lvl      = tail $ Access lvl <$> F.formals (_frame lvl)
+formals lvl      = tail (Access lvl <$> F.formals (_frame lvl))
 
-staticLink :: (MonadError String m) => Level -> Level -> m Tree.Exp
+staticLink :: (MonadReader env m, HasRegs env F.Regs, MonadError String m)
+           => Level -> Level -> m Tree.Exp
 staticLink curr@(Level {}) var@(Level {_unique = uniqVar})
-  | _unique curr == uniqVar = return (Tree.Temp F.fp)
+  | _unique curr == uniqVar = Tree.Temp . (^.regs.F.fp) <$> ask
   | otherwise               = case F.formals (_frame curr) of
                                 []     -> throwError " static link can't be found in formals "
                                 link:_ -> F.exp link <$> staticLink (_parent curr) var
@@ -77,26 +83,24 @@ exSeq [] = Tree.Exp (Tree.Const 0)
 exSeq xs = foldr1 Tree.Seq xs
 
 unEx :: Exp -> IO Tree.Exp
-unEx (Ex e) = return e
-unEx (Nx s) = return $ Tree.ESeq s (Tree.Const 0)
-unEx (Cx genstmt) = do
-  r <- Temp.newTemp
-  t <- Temp.newLabel
-  f <- Temp.newLabel
-  return $ Tree.ESeq (exSeq [ Tree.Move (Tree.Temp r) (Tree.Const 1)
-                            , genstmt t f
-                            , Tree.Label f
-                            , Tree.Move (Tree.Temp r) (Tree.Const 0)
-                            , Tree.Label t
-                            ])
-                     (Tree.Temp r)
+unEx (Ex e)       = pure e
+unEx (Nx s)       = pure $ Tree.ESeq s (Tree.Const 0)
+unEx (Cx genstmt) = trans <$> Temp.newTemp <*> Temp.newLabel <*> Temp.newLabel
+  where
+    trans r t f =
+      Tree.ESeq (exSeq [ Tree.Move (Tree.Temp r) (Tree.Const 1)
+                       , genstmt t f
+                       , Tree.Label f
+                       , Tree.Move (Tree.Temp r) (Tree.Const 0)
+                       , Tree.Label t
+                       ])
+                (Tree.Temp r)
 
-unNx (Nx s) = return s
-unNx (Ex e) = return $ Tree.Exp e
-unNx (Cx genstmt) = do
-  t <- Temp.newLabel
-  f <- Temp.newLabel
-  return $ exSeq [ genstmt t f, Tree.Label f, Tree.Label t ]
+unNx (Nx s)       = pure s
+unNx (Ex e)       = pure $ Tree.Exp e
+unNx (Cx genstmt) = trans <$> Temp.newLabel <*> Temp.newLabel
+  where
+    trans t f = exSeq [ genstmt t f, Tree.Label f, Tree.Label t ]
 
 unCx :: (MonadError String m) => Exp -> Temp.Label -> Temp.Label -> m Tree.Stmt
 unCx (Cx x)              t f = return $ x t f
@@ -108,7 +112,7 @@ unCx (Nx _)              _ _ = throwError ( " The impossible happened!"
 
 -- translation of Abstract Syntax into Exp ----------------------------------------------------------------
 
-simpleVar :: (MonadError String m) => Access -> Level -> m Exp
+simpleVar :: (MonadReader env m, HasRegs env F.Regs, MonadError String m) => Access -> Level -> m Exp
 simpleVar (Access varLvl varAccess) currLvl =
   Ex . F.exp varAccess <$> (staticLink currLvl varLvl)
 

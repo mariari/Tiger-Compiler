@@ -1,5 +1,6 @@
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE FunctionalDependencies #-}
 
 module Frame.X86
   ( Access(..)
@@ -9,7 +10,10 @@ module Frame.X86
   , I.allocLocal
   , Frame
   , FrameI(..)
+  , Registers
+  , Regs
   , fp
+  , genRegisters
   , exp
   , wordSize
   ) where
@@ -34,6 +38,17 @@ data Frame = Frame { formals       :: [Access]
                    } deriving Show
 makeLenses ''Frame
 
+type Regs = Registers
+data Registers = Reg
+  { _fp :: T.Temp } deriving Show
+makeLenses ''Registers
+
+genRegisters :: IO Registers
+genRegisters = Reg <$> genFp
+
+genFp :: IO T.Temp
+genFp = T.newTemp
+
 wordSize :: Int
 wordSize = 4
 
@@ -41,12 +56,6 @@ allocFormal (allocd, xs) False = (\x -> (allocd, InReg x : xs)) <$> T.newTemp
 allocFormal (allocd, xs) True  = return (succAlloc, InFrame (succAlloc * wordSize + wordSize) : xs)
   where
     succAlloc = allocd + 1
-
--- really we want a constant value here, this _should_ be safe as we just want a constant
--- the source for Data.Unique does this trick, so this should be okay for a constant!
-fp :: T.Temp
-fp = unsafePerformIO T.newTemp
-{-# NOINLINE fp #-}
 
 exp :: Access -> Tree.Exp -> Tree.Exp
 exp (InFrame offset) t = Tree.Mem (Tree.Binop t Tree.Plus (Tree.Const offset))
