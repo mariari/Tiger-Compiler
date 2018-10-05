@@ -12,7 +12,7 @@ import Data.Unique.Show
 
 -- Temp Type ----------------------------------------------------------
 
-newtype Temp = T Unique
+newtype Temp = T Unique deriving (Eq,Ord)
 
 newTemp = T <$> newUnique
 

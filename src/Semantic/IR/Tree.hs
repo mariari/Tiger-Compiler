@@ -6,7 +6,7 @@ data Exp = Const Int
          | Name Temp.Label
          | Temp Temp.Temp
          | Binop Exp BinOp Exp
-         | Mem Exp
+         | Mem Exp -- augment with Size later
          | Call Exp [Exp]
          | ESeq Stmt Exp
          deriving Show

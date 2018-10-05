@@ -15,6 +15,7 @@ import qualified Semantic.Temp    as Temp
 import qualified Semantic.IR.Tree as Tree
 
 import Control.Lens hiding(Level)
+import Data.Unique.Show
 import Control.Monad.Except
 import Data.Monoid((<>))
 
@@ -23,11 +24,12 @@ type Escape = Bool
 data Level = TopLevel
            | Level { _parent :: Level
                    , _frame  :: F.Frame
+                   , _unique :: Unique
                    } deriving Show
 makeLenses ''Level
 
-data Access = Access { _level  :: Level
-                     , _fAcess :: F.Access
+data Access = Access { _level  :: Level    -- the level where the access was made
+                     , _fAcess :: F.Access -- location of var on the level
                      } deriving Show
 makeLenses ''Access
 
@@ -42,8 +44,11 @@ outerMost = TopLevel
 mainLevel :: IO Level
 mainLevel = newLevel outerMost (Temp.nameLabel "Tiger_Main") []
 
+-- True represents the static link added to the formals
 newLevel :: Level -> Temp.Label -> [Escape] -> IO Level
-newLevel parent name formals = Level parent <$> F.newFrame name formals
+newLevel parent name formals =
+  Level parent <$> (F.newFrame name (True : formals))
+               <*> newUnique
 
 allocLocal :: (MonadIO m, MonadError String m) => Level -> Bool -> m (Level, Access)
 allocLocal TopLevel _ = throwError ("Tried to allocate on the top level")
@@ -52,10 +57,19 @@ allocLocal lvl esc = do
   let newLevel = (set frame fra lvl)
   return (newLevel, Access newLevel access)
 
+-- tail to remove the static link
 formals :: Level -> [Access]
 formals TopLevel = []
-formals lvl      = Access lvl <$> F.formals (_frame lvl)
+formals lvl      = tail $ Access lvl <$> F.formals (_frame lvl)
 
+staticLink :: (MonadError String m) => Level -> Level -> m Tree.Exp
+staticLink curr@(Level {}) var@(Level {_unique = uniqVar})
+  | _unique curr == uniqVar = return (Tree.Temp F.fp)
+  | otherwise               = case F.formals (_frame curr) of
+                                []     -> throwError " static link can't be found in formals "
+                                link:_ -> F.exp link <$> staticLink (_parent curr) var
+staticLink TopLevel _ = throwError " staticLink was passed a TopLevel!!!"
+staticLink _ TopLevel = throwError " staticLink was passed a TopLevel!!!"
 -- Exp conversions-------------------------------------------------------------------------
 
 exSeq :: [Tree.Stmt] -> Tree.Stmt
@@ -92,5 +106,19 @@ unCx (Ex e)              t f = return $ Tree.CJump Tree.Ne (Tree.Const 0) e t f
 unCx (Nx _)              _ _ = throwError ( " The impossible happened!"
                                          <> " Translate.unCx received an Nx!" )
 
-simpleVar :: Access -> Level -> Exp
-simpleVar = undefined
+-- translation of Abstract Syntax into Exp ----------------------------------------------------------------
+
+simpleVar :: (MonadError String m) => Access -> Level -> m Exp
+simpleVar (Access varLvl varAccess) currLvl =
+  Ex . F.exp varAccess <$> (staticLink currLvl varLvl)
+
+-- Check memory
+subscript :: Exp -> Exp -> IO Exp
+subscript arrExp lookupExp = trans <$> unEx arrExp <*> unEx lookupExp
+  where
+    trans unArr unLookup =
+      Ex
+      . Tree.Mem
+      . Tree.Binop (Tree.Mem unArr) Tree.Plus
+      . Tree.Binop (Tree.Mem unLookup) Tree.Mul
+      $ Tree.Const F.wordSize

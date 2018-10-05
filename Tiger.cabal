@@ -38,6 +38,7 @@ library
     , Frame.X86
     , Semantic.Temp
     , Semantic.Translate
+    , Semantic.IR.Tree
 
   other-modules:
       Paths_Tiger

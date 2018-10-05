@@ -185,7 +185,7 @@ transExp' exData (Absyn.ArrCreate tyid length content pos) = do
 
 transExp' exData (Absyn.RecCreate tyid givens pos) = do
   Trans {_tm = typeMap} <- get
-  recType              <- liftIO $ traverse actualType (typeMap Map.!? tyid)
+  recType               <- liftIO $ traverse actualType (typeMap Map.!? tyid)
   case recType of
     Just (PT.RECORD syms uniqueType) -> do
       let sortedRecType = List.sortOn fst syms              -- with these two sorted, we can just compare
@@ -218,15 +218,14 @@ transExp' exData (Absyn.Let decs exps pos) = do
 
 transVar :: MonadTran m => ExtraData -> Absyn.Var -> m VarTy
 transVar exData (Absyn.SimpleVar sym pos) = do
+  let err str = throwError (show pos <> " " <> S.unintern sym <> str)
   Trans {_em = envMap} <- get
   case envMap Map.!? sym of
-    Nothing ->
-      throwError (show pos <> " " <> S.unintern sym <> " is not defined")
-    Just v@(Env.FunEntry {_formals, _result}) -> -- can't store a function like this... change later?
-      throwError (show pos <> " " <> S.unintern sym <> " is a function")
+    Nothing                  -> err " is not defined"
+    Just v@(Env.FunEntry {}) -> err " is a function"
     Just v@(Env.VarEntry {_ty}) -> do
       actualTy <- liftIO (actualType _ty)
-      return $ VarTy { _var =  set Env.ty actualTy v
+      return $ VarTy { _var  = set Env.ty actualTy v
                      , _expr = ()
                      }
 
@@ -248,12 +247,13 @@ transVar exData (Absyn.FieldVar recordType field pos) = do
     Env.FunEntry {} -> throwError (show pos <> " tried to do record lookup on a function")
     v@Env.VarEntry {_ty} -> do
       actualTy <- liftIO (actualType _ty)
-      lst <- checkRecType actualTy pos
+      lst      <- checkRecType actualTy pos
       case List.find (\(sym,_) -> sym == field) lst of
         Just (_, ty) -> do
           aTy <- liftIO (actualType ty)
           return (VarTy { _expr, _var = set Env.ty aTy v })
-        Nothing -> throwError (show pos <> " Field in " <> S.unintern field <> "Record does not exist")
+        Nothing ->
+          throwError (show pos <> " Field in " <> S.unintern field <> "Record does not exist")
 
 transTy :: MonadTran m => RefMap -> Absyn.Ty -> m (PT.Type, RefMap)
 transTy refMap (Absyn.NameTy sym pos) = do
@@ -304,9 +304,9 @@ transVarDecs exData decs pos = traverse f decs
         Just sty ->
           case trans^.tm.at sty of
             Nothing -> throwError (show pos <> " type " <> S.unintern sty <> " is not defined ")
-            Just x
-              | x == _typ  -> newMap
-              | otherwise -> throwError (show pos <> " " <> show _typ <> " is not " <> show x)
+            Just x -> do
+              checkSameTyp x _typ pos
+              throwError (show pos <> " " <> show _typ <> " is not " <> show x)
     f _ = throwError (show pos <> " violated precondition ")
 
 transFunDecsHead :: (MonadTran m, Traversable t, Show a) => ExtraData -> t Absyn.Dec -> a -> m ()
