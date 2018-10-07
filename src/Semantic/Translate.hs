@@ -1,8 +1,5 @@
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE FunctionalDependencies #-}
+
 module Semantic.Translate
   ( Access
   , Level
@@ -14,14 +11,19 @@ module Semantic.Translate
   ) where
 
 import qualified Frame.CurrentMachine as F
-import qualified Semantic.Temp    as Temp
-import qualified Semantic.IR.Tree as Tree
-import App.Environment
+import qualified Semantic.Temp        as Temp
+import qualified Semantic.IR.Tree     as Tree
+import qualified AbstractSyntax       as Abs
+import           App.Environment
+import           Semantic.Fragment
 
+import Data.IORef
 import Data.Unique.Show
 import Control.Monad.Except
 import Control.Monad.Reader
-import Data.Semigroup((<>))
+import Data.Semigroup ((<>))
+import Data.Symbol    (unintern,Symbol)
+import Data.List      (elemIndex, find)
 import Control.Lens hiding(Level)
 
 type Escape = Bool
@@ -69,13 +71,17 @@ formals lvl      = tail (Access lvl <$> F.formals (_frame lvl))
 
 staticLink :: (MonadReader env m, HasRegs env F.Regs, MonadError String m)
            => Level -> Level -> m Tree.Exp
-staticLink curr@(Level {}) var@(Level {_unique = uniqVar})
-  | _unique curr == uniqVar = Tree.Temp . (^.regs.F.fp) <$> ask
-  | otherwise               = case F.formals (_frame curr) of
-                                []     -> throwError " static link can't be found in formals "
-                                link:_ -> F.exp link <$> staticLink (_parent curr) var
 staticLink TopLevel _ = throwError " staticLink was passed a TopLevel!!!"
 staticLink _ TopLevel = throwError " staticLink was passed a TopLevel!!!"
+
+staticLink curr@(Level {}) var@(Level {_unique = uniqVar})
+  | _unique curr == uniqVar = do
+      env <- ask
+      return (Tree.Temp (view (regs . F.fp) env))
+  | otherwise =
+    case F.formals (_frame curr) of
+      []     -> throwError " static link can't be found in formals "
+      link:_ -> F.exp link <$> staticLink (_parent curr) var
 -- Exp conversions-------------------------------------------------------------------------
 
 exSeq :: [Tree.Stmt] -> Tree.Stmt
@@ -110,11 +116,31 @@ unCx (Ex e)              t f = return $ Tree.CJump Tree.Ne (Tree.Const 0) e t f
 unCx (Nx _)              _ _ = throwError ( " The impossible happened!"
                                          <> " Translate.unCx received an Nx!" )
 
+-- this is for when we can't have the monad propogate out and we are **sure** we have no
+unCxErr :: Exp -> Temp.Label -> Temp.Label -> Tree.Stmt
+unCxErr x t f = case runExcept (unCx x t f) of
+                  Right x -> x
+                  Left a  -> error a
 -- translation of Abstract Syntax into Exp ----------------------------------------------------------------
+
+memPlus :: Tree.Exp -> Tree.Exp -> Tree.Exp
+memPlus x = Tree.Mem
+          . Tree.Binop x Tree.Plus
 
 simpleVar :: (MonadReader env m, HasRegs env F.Regs, MonadError String m) => Access -> Level -> m Exp
 simpleVar (Access varLvl varAccess) currLvl =
   Ex . F.exp varAccess <$> (staticLink currLvl varLvl)
+
+fieldVar :: (MonadError String m, MonadIO m) => Exp -> Symbol -> [(Symbol, b)] -> m Exp
+fieldVar record accessor fields =
+  case elemIndex accessor (fst <$> fields) of
+    Nothing -> throwError ( "fieldVar: field member " <> unintern accessor <> " is not in the record" )
+    Just i  -> trans i <$> liftIO (unEx record)
+  where
+    trans index unRecord = Ex
+                         . memPlus (Tree.Mem unRecord)
+                         . Tree.Binop (Tree.Const index) Tree.Mul
+                         $ Tree.Const F.wordSize
 
 -- Check memory
 subscript :: Exp -> Exp -> IO Exp
@@ -122,7 +148,90 @@ subscript arrExp lookupExp = trans <$> unEx arrExp <*> unEx lookupExp
   where
     trans unArr unLookup =
       Ex
-      . Tree.Mem
-      . Tree.Binop (Tree.Mem unArr) Tree.Plus
+      . memPlus (Tree.Mem unArr)
       . Tree.Binop (Tree.Mem unLookup) Tree.Mul
       $ Tree.Const F.wordSize
+
+infix' left op right = do
+  l <- unEx left
+  r <- unEx right
+  let relOp op = Cx $ Tree.CJump op l r
+      binOp op = Ex $ Tree.Binop l op r
+  case op of
+    Abs.Plus  -> return $ binOp Tree.Plus
+    Abs.Minus -> return $ binOp Tree.Minus
+    Abs.Times -> return $ binOp Tree.Mul
+    Abs.Div   -> return $ binOp Tree.Div
+    Abs.And   -> return $ binOp Tree.And
+    Abs.Or    -> return $ binOp Tree.Or
+    Abs.Eq    -> return $ relOp Tree.Eq
+    Abs.Neq   -> return $ relOp Tree.Ne
+    Abs.Lt    -> return $ relOp Tree.Lt
+    Abs.Le    -> return $ relOp Tree.Le
+    Abs.Gt    -> return $ relOp Tree.Gt
+    Abs.Ge    -> return $ relOp Tree.Ge
+
+intLit :: Int -> Exp
+intLit = Ex . Tree.Const
+
+stringLit :: (MonadReader env m, HasFrag env (IORef [Frag]), MonadIO m) => String -> m Exp
+stringLit s = do
+  env   <- ask
+  frags <- liftIO . readIORef $ env^.frag
+  case find (locateFrag s) frags of
+    Just (Str l _) ->
+      return (Ex (Tree.Name l))
+    _ -> do
+      l <- liftIO Temp.newLabel
+      liftIO (modifyIORef' (env^.frag) (Str l s :))
+      return (Ex (Tree.Name l))
+  where
+    locateFrag toFind (Proc {}) = False
+    locateFrag toFind (Str _ s) = toFind == s
+
+nil :: Exp
+nil = Ex (Tree.Const 0)
+
+ifThen :: (MonadIO m, MonadError String m) => Exp -> Exp -> m Exp
+ifThen pred then' = do
+  t      <- liftIO Temp.newLabel
+  f      <- liftIO Temp.newLabel
+  unPred <- unCx pred t f
+  unThen <- liftIO (unNx then')
+  return $ Nx (exSeq [ unPred
+                     , Tree.Label t
+                     , unThen
+                     , Tree.Label f ])
+
+ifThenElse :: (MonadIO m, MonadError String m) => Exp -> Exp -> Exp -> m Exp
+ifThenElse pred then' else' = do
+  t      <- liftIO Temp.newLabel
+  f      <- liftIO Temp.newLabel
+  done   <- liftIO Temp.newLabel
+  result <- liftIO Temp.newTemp
+  unPred <- unCx pred t f
+  let general unThen unElse = -- this should be the general pattern for Nx and Cx
+        exSeq [unPred
+              , Tree.Label t
+              , Tree.Jump (Tree.Name done) [done]
+              , Tree.Label f
+              , unElse
+              , Tree.Label done
+              ]
+  -- this whole case thing can probably be optimized better, for example Ι only check for then' and not else'
+  -- for Nx this does not matter as then' ∈ Nx ⟹ else' ∈ Nx. however Ex and Cx are tricky
+  case then' of
+    Nx unThen -> Nx . general unThen <$> liftIO (unNx else')
+    Cx unThen -> return $ Cx (\t' f' -> exSeq [ general (unThen t' f') (unCxErr else' t' f') ])
+    Ex unThen -> do
+      unElse <- liftIO (unEx else')
+      return . Ex
+             . Tree.ESeq (exSeq [ unPred
+                                , Tree.Label t
+                                , Tree.Move (Tree.Temp result) unThen
+                                , Tree.Jump (Tree.Name done) [done]
+                                , Tree.Label f
+                                , Tree.Move (Tree.Temp result) unElse
+                                , Tree.Label done
+                                ])
+             $ Tree.Temp result
