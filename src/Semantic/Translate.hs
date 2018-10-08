@@ -265,3 +265,26 @@ assign left right = trans <$> unEx left <*> unEx right
     trans unL unR = Nx (Tree.Move unL unR)
 
 break label = Nx (Tree.Jump (Tree.Name label) [label])
+
+while :: (MonadIO m, MonadError String m) => Exp -> Exp -> Temp.Label -> m Exp
+while test body doneL = do
+  testL  <- liftIO Temp.newLabel
+  bodyL  <- liftIO Temp.newLabel
+  unBody <- liftIO $ unNx body
+  unTest <- unCx test bodyL doneL
+  return . Nx $ exSeq [ Tree.Label testL
+                      , unTest
+                      , Tree.Label bodyL
+                      , unBody
+                      , Tree.Jump (Tree.Name testL) [testL]
+                      , Tree.Label doneL]
+
+sequence []  = return . Nx . Tree.Exp $ Tree.Const 0
+sequence [x] = return x
+sequence xs = do
+  let lst = last xs
+  unInit <- traverse unNx (init xs)
+  case lst of
+    Nx s -> return . Nx $ exSeq (s : unInit)
+    Ex e -> return . Ex $ Tree.ESeq (exSeq unInit) e
+    Cx c -> Ex . Tree.ESeq (exSeq unInit) <$> unEx lst
