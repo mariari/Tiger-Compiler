@@ -16,12 +16,14 @@ module Frame.X86
   , genRegisters
   , exp
   , wordSize
+  , externalCall
   ) where
 
 import Prelude hiding (exp)
 import Control.Lens
 import Control.Monad(foldM)
 import System.IO.Unsafe(unsafePerformIO)
+import Data.Symbol(Symbol)
 
 import qualified Semantic.Temp    as T
 import qualified Frame.Interface  as I
@@ -60,6 +62,9 @@ allocFormal (allocd, xs) True  = return (succAlloc, InFrame (succAlloc * wordSiz
 exp :: Access -> Tree.Exp -> Tree.Exp
 exp (InFrame offset) t = Tree.Mem (Tree.Binop t Tree.Plus (Tree.Const offset))
 exp (InReg register) _ = Tree.Temp register
+
+externalCall :: Symbol -> [Tree.Exp] -> Tree.Exp
+externalCall name args = Tree.Call (Tree.Name (T.nameLabel name)) args
 
 instance I.FrameFn Frame where
   name = name

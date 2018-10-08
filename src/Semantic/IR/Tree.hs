@@ -3,6 +3,7 @@ module Semantic.IR.Tree where
 import qualified Semantic.Temp as Temp
 
 data Exp = Const Int
+         | Neg Exp
          | Name Temp.Label
          | Temp Temp.Temp
          | Binop Exp BinOp Exp

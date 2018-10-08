@@ -17,6 +17,7 @@ import qualified AbstractSyntax       as Abs
 import           App.Environment
 import           Semantic.Fragment
 
+import Text.Show.Functions
 import Data.IORef
 import Data.Unique.Show
 import Control.Monad.Except
@@ -24,7 +25,8 @@ import Control.Monad.Reader
 import Data.Semigroup ((<>))
 import Data.Symbol    (unintern,Symbol)
 import Data.List      (elemIndex, find)
-import Control.Lens hiding(Level)
+import Control.Monad  (zipWithM)
+import Control.Lens hiding(Level,assign)
 
 type Escape = Bool
 
@@ -44,6 +46,7 @@ makeLenses ''Access
 data Exp = Ex Tree.Exp  -- Expression
          | Nx Tree.Stmt -- No Result
          | Cx (Temp.Label -> Temp.Label -> Tree.Stmt) -- Conditional
+         deriving Show
 
 outerMost :: Level
 outerMost = TopLevel
@@ -235,3 +238,30 @@ ifThenElse pred then' else' = do
                                 , Tree.Label done
                                 ])
              $ Tree.Temp result
+
+recCreate :: [Exp] -> IO Exp
+recCreate fields = do
+  r <- Temp.newTemp
+  let init = Tree.Move (Tree.Temp r)
+           . F.externalCall "allocRecord"
+           $ [Tree.Const (length fields * F.wordSize)]
+  seq <- zipWithM (\e i -> Tree.Move (memPlus (Tree.Temp r)
+                                              (Tree.Const (i * F.wordSize)))
+                          <$> unEx e)
+                  fields [0..]
+  return $ Ex (Tree.ESeq (exSeq (init : seq)) (Tree.Temp r))
+
+arrCreate :: Exp -> Exp -> IO Exp
+arrCreate size init = trans <$> unEx size <*> unEx init
+  where
+    trans unSize unInit = Ex (F.externalCall "initArray" [unSize, unInit])
+
+negation :: Exp -> IO Tree.Exp
+negation = fmap Tree.Neg . unEx
+
+assign :: Exp -> Exp -> IO Exp
+assign left right = trans <$> unEx left <*> unEx right
+  where
+    trans unL unR = Nx (Tree.Move unL unR)
+
+break label = Nx (Tree.Jump (Tree.Name label) [label])

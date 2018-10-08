@@ -42,6 +42,7 @@ library
     , Semantic.IR.Tree
     , App.Environment
     , App.Initialize
+    , Semantic.Fragment
   other-modules:
       Paths_Tiger
   hs-source-dirs:
