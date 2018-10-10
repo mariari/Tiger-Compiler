@@ -17,11 +17,12 @@ import qualified AbstractSyntax       as Abs
 import           App.Environment
 import           Semantic.Fragment
 
+import Prelude hiding (sequence)
 import Text.Show.Functions
 import Data.IORef
 import Data.Unique.Show
-import Control.Monad.Except
-import Control.Monad.Reader
+import Control.Monad.Except hiding (sequence)
+import Control.Monad.Reader hiding (sequence)
 import Data.Semigroup ((<>))
 import Data.Symbol    (unintern,Symbol)
 import Data.List      (elemIndex, find)
@@ -216,6 +217,7 @@ ifThenElse pred then' else' = do
   let general unThen unElse = -- this should be the general pattern for Nx and Cx
         exSeq [unPred
               , Tree.Label t
+              , unThen
               , Tree.Jump (Tree.Name done) [done]
               , Tree.Label f
               , unElse
@@ -279,12 +281,12 @@ while test body doneL = do
                       , Tree.Jump (Tree.Name testL) [testL]
                       , Tree.Label doneL]
 
+sequence :: [Exp] -> IO Exp
 sequence []  = return . Nx . Tree.Exp $ Tree.Const 0
 sequence [x] = return x
 sequence xs = do
-  let lst = last xs
   unInit <- traverse unNx (init xs)
-  case lst of
-    Nx s -> return . Nx $ exSeq (s : unInit)
+  case last xs of
+    Nx s -> return . Nx $ Tree.Seq (exSeq unInit) s
     Ex e -> return . Ex $ Tree.ESeq (exSeq unInit) e
-    Cx c -> Ex . Tree.ESeq (exSeq unInit) <$> unEx lst
+    Cx c -> return . Cx $ \t f -> Tree.Seq (exSeq unInit) (c t f)
