@@ -38,6 +38,9 @@ data Level = TopLevel
                    } deriving Show
 makeLenses ''Level
 
+type EnvHasRegs env m = (HasRegs env F.Regs, MonadReader env m)
+type EnvHasFrag env m = (MonadReader env m, HasFrag env (IORef [Frag]))
+
 data Access = Access { _level  :: Level    -- the level where the access was made
                      , _fAcess :: F.Access -- location of var on the level
                      } deriving Show
@@ -73,8 +76,7 @@ formals :: Level -> [Access]
 formals TopLevel = []
 formals lvl      = tail (Access lvl <$> F.formals (_frame lvl))
 
-staticLink :: (MonadReader env m, HasRegs env F.Regs, MonadError String m)
-           => Level -> Level -> m Tree.Exp
+staticLink :: (EnvHasRegs env m, MonadError String m) => Level -> Level -> m Tree.Exp
 staticLink TopLevel _ = throwError " staticLink was passed a TopLevel!!!"
 staticLink _ TopLevel = throwError " staticLink was passed a TopLevel!!!"
 
@@ -131,7 +133,7 @@ memPlus :: Tree.Exp -> Tree.Exp -> Tree.Exp
 memPlus x = Tree.Mem
           . Tree.Binop x Tree.Plus
 
-simpleVar :: (MonadReader env m, HasRegs env F.Regs, MonadError String m) => Access -> Level -> m Exp
+simpleVar :: (EnvHasRegs env m, MonadError String m) => Access -> Level -> m Exp
 simpleVar (Access varLvl varAccess) currLvl =
   Ex . F.exp varAccess <$> (staticLink currLvl varLvl)
 
@@ -178,7 +180,7 @@ infix' left op right = do
 intLit :: Int -> Exp
 intLit = Ex . Tree.Const
 
-stringLit :: (MonadReader env m, HasFrag env (IORef [Frag]), MonadIO m) => String -> m Exp
+stringLit :: (EnvHasFrag env m, MonadIO m) => String -> m Exp
 stringLit s = do
   env   <- ask
   frags <- liftIO . readIORef $ env^.frag
@@ -215,7 +217,7 @@ ifThenElse pred then' else' = do
   result <- liftIO Temp.newTemp
   unPred <- unCx pred t f
   let general unThen unElse = -- this should be the general pattern for Nx and Cx
-        exSeq [unPred
+        exSeq [ unPred
               , Tree.Label t
               , unThen
               , Tree.Jump (Tree.Name done) [done]
@@ -290,3 +292,16 @@ sequence xs = do
     Nx s -> return . Nx $ Tree.Seq (exSeq unInit) s
     Ex e -> return . Ex $ Tree.ESeq (exSeq unInit) e
     Cx c -> return . Cx $ \t f -> Tree.Seq (exSeq unInit) (c t f)
+
+funcall :: (EnvHasRegs env m, MonadIO m, MonadError String m)
+        => Temp.Label -> Level -> [Exp] -> Level -> m Exp
+funcall _       TopLevel _ _          = throwError "Translate funcall was passed a TopLevel"
+funcall labelF levelF args currentLvl = do
+  unArgs <- liftIO (traverse unEx args)
+  case _parent levelF of
+    TopLevel -> return . Ex $ F.externalCall (Temp.fromLabel labelF) unArgs
+    Level {} -> do
+      link   <- staticLink currentLvl (_parent levelF)
+      return . Ex
+             . Tree.Call (Tree.Name labelF)
+             $ link : unArgs

@@ -12,6 +12,7 @@ module Control.Monad.Unique where
 import Control.Monad.State.Strict
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Except
+import Control.Applicative
 
 class MonadUnique m where
   fresh :: m Int

@@ -4,6 +4,7 @@ module Semantic.Temp
   , Label
   , newLabel
   , nameLabel
+  , fromLabel
   ) where
 
 import Data.Symbol as S
@@ -27,3 +28,6 @@ newLabel = (\u -> L (S.intern $ "L" <> show (hashUnique u))) <$> newUnique
 
 nameLabel :: Symbol -> Label
 nameLabel = L
+
+fromLabel :: Label -> Symbol
+fromLabel (L s) = s
