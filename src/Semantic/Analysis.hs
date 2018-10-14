@@ -25,17 +25,15 @@ import           Control.Monad.Reader
 import           Control.Monad.Except
 import           Data.Foldable (traverse_)
 
-type TranslateExp = ()
-
 type RefMap = Map.Map S.Symbol (Ref.IORef (Maybe PT.Type))
 
-data Expty = Expty { _expr :: !TranslateExp
+data Expty = Expty { _expr :: !T.Exp
                    , _typ  :: !PT.Type
                    } deriving Show
 makeLenses ''Expty
 
 data VarTy = VarTy { _var  :: !Env.Entry
-                   , _expr :: !TranslateExp
+                   , _expr :: !T.Exp
                    } deriving Show
 
 varTytoExpTy (VarTy {_var, _expr}) =
@@ -50,7 +48,7 @@ data Translation = Trans { _tm   :: !Env.TypeMap
                          }  deriving Show
 makeLenses ''Translation
 
-data ExtraData = Ex { _inLoop :: Bool
+data ExtraData = Ex { _inLoop :: Maybe Temp.Label
                     , _level  :: T.Level
                     } deriving Show
 makeLenses ''ExtraData
@@ -79,15 +77,15 @@ runMonadTran tm em env f = runReaderT (runExceptT (runStateT f trans)) env
 transExp :: Env.TypeMap -> Env.EntryMap -> Absyn.Exp -> Env -> IO Expty
 transExp tm em absyn env = do
   mainLevel <- T.mainLevel
-  x <- runMonadTran tm em env (transExp' (Ex {_inLoop = False, _level = mainLevel}) absyn)
+  x <- runMonadTran tm em env (transExp' (Ex {_inLoop = Nothing, _level = mainLevel}) absyn)
   case x of
     Left a          -> error a
     Right (expt,tl) -> return expt
 
 transExp' :: MonadTran m => ExtraData -> Absyn.Exp -> m Expty
-transExp' _ (Absyn.IntLit _ _)    = return (Expty {_expr = (), _typ = PT.INT})
-transExp' _ (Absyn.Nil _)         = return (Expty {_expr = (), _typ = PT.NIL})
-transExp' _ (Absyn.StringLit _ _) = return (Expty {_expr = (), _typ = PT.STRING})
+transExp' _ (Absyn.IntLit x _)    = return (Expty {_expr = T.intLit x, _typ = PT.INT})
+transExp' _ (Absyn.Nil _)         = return (Expty {_expr = T.nil, _typ = PT.NIL})
+transExp' _ (Absyn.StringLit s _) = (\s -> Expty {_expr = s, _typ = PT.STRING}) <$> T.stringLit s
 transExp' e (Absyn.Var x)         = varTytoExpTy <$> transVar e x
 
 transExp' exData (Absyn.Infix' left x right pos) =
@@ -104,34 +102,41 @@ transExp' exData (Absyn.Infix' left x right pos) =
             Absyn.Le    -> handleInfixStrInt
             Absyn.Eq    -> handleInfixSame
             Absyn.Neq   -> handleInfixSame
-  in f exData left right pos
+  in f exData left x right pos
 
 transExp' exData (Absyn.Negation val pos) = do
   val' <- transExp' exData val
   checkInt val' pos
   return (over expr id val') -- over for future transactions
 
-transExp' exData (Absyn.Sequence [] pos) = return (Expty {_expr = (), _typ = PT.NIL})
-transExp' exData (Absyn.Sequence xs pos) = last <$> traverse (transExp' exData) xs
+transExp' exData (Absyn.Sequence [] pos) =
+  liftIO $ (\_expr -> Expty {_expr, _typ = PT.NIL}) <$> (T.sequence [])
+transExp' exData (Absyn.Sequence xs pos) = do
+  exs <- traverse (transExp' exData) xs
+  exp <- liftIO (T.sequence (view expr <$> exs))
+  return $ set expr exp (last exs)
 
-transExp' (Ex {_inLoop}) (Absyn.Break pos)
-  | _inLoop   = return (Expty {_expr = (), _typ = PT.NIL})
-  | otherwise = throwError (show pos <> " break needs to be used inside a loop")
+transExp' (Ex {_inLoop = Just x}) (Absyn.Break pos) =
+  return (Expty {_expr = T.break x, _typ = PT.NIL})
+transExp' _ (Absyn.Break pos) =
+  throwError (show pos <> " break needs to be used inside a loop")
 
 transExp' exData (Absyn.While pred body pos) = do
-  pred' <- transExp' exData pred
-  body' <- transExp' (set inLoop True exData) body
+  newBreak <- liftIO (Temp.newLabel)
+  pred'    <- transExp' exData pred
+  body'    <- transExp' (set inLoop (Just newBreak) exData) body
   checkInt     pred' pos
   checkNilUnit body' pos
   return (over expr id body')
 
 transExp' exData (Absyn.For var esc from to body pos) = do
+  newBreak <- liftIO (Temp.newLabel)
   from' <- transExp' exData from
   to'   <- transExp' exData to
   checkInt from' pos
   checkInt to' pos
   (exData, access) <- allocLocal exData esc
-  body' <- locallyInsert1 (transExp' (set inLoop True exData) body)
+  body' <- locallyInsert1 (transExp' (set inLoop (Just newBreak) exData) body)
                           (var, Env.VarEntry {_ty = PT.INT, _modifiable = False, _access = access})
   checkNilUnit body' pos -- the false makes it so if we try to modify it, it errors
   return (over expr id body')
@@ -156,24 +161,29 @@ transExp' exData (Absyn.Funcall fnSym args pos) = do
   case trans^.em.at fnSym of
     Nothing                -> throwError (show pos <> " function " <> S.unintern fnSym <> " is not defined")
     Just (Env.VarEntry {}) -> throwError (show pos <> " variable " <> S.unintern fnSym <> " is not a function")
-    Just (Env.FunEntry {_formals, _result}) -> do
-      zipWithM_ (\arg formal -> do
-                    Expty {_typ} <- transExp' exData arg
-                    actualFormal <- liftIO (actualType formal)
-                    actualArg    <- liftIO (actualType _typ)
-                    checkSameTyp actualFormal actualArg pos)
+    Just (Env.FunEntry {_formals, _result, _level, _label}) -> do
+      expArgs <- zipWithM (\arg formal -> do
+                             Expty {_typ, _expr} <- transExp' exData arg
+                             actualFormal <- liftIO (actualType formal)
+                             actualArg    <- liftIO (actualType _typ)
+                             checkSameTyp actualFormal actualArg pos
+                             return _expr)
                 args
                 _formals
-      return (Expty {_expr = (), _typ = _result})
+      _expr <- T.funcall _label _level expArgs (exData^.level)
+      return (Expty {_expr, _typ = _result})
 
 transExp' exData (Absyn.Assign var toPutE pos) = do
-  VarTy {_var = envVar} <- transVar exData var
-  toPut                 <- transExp' exData toPutE
+  VarTy {_var = envVar, _expr} <- transVar exData var
+  toPut                        <- transExp' exData toPutE
   case envVar of
     Env.FunEntry {}                    -> throwError (show pos <> " can't set a function")
     Env.VarEntry {_modifiable = False} -> throwError (show pos <> " variable is not modifiable")
-    Env.VarEntry {_ty = varType}       -> Expty {_expr = (), _typ = PT.UNIT}
-                                          <$ checkSameTyp varType (toPut^.typ) pos
+    Env.VarEntry {_ty = varType}       -> do
+      checkSameTyp varType (toPut^.typ) pos
+      _expr <- liftIO (T.assign _expr (toPut^.expr))
+      return $ Expty {_expr, _typ = PT.UNIT}
+
 transExp' exData (Absyn.ArrCreate tyid length content pos) = do
   Trans {_tm = typeMap} <- get
   lengthExp             <- transExp' exData length
@@ -182,8 +192,9 @@ transExp' exData (Absyn.ArrCreate tyid length content pos) = do
   case arrType of
     Just (PT.ARRAY arrTyp uniqueId) -> do
       content <- transExp' exData content
+      _expr   <- liftIO (T.arrCreate (view expr lengthExp) (view expr content))
       checkSameTyp arrTyp (content^.typ) pos
-      return (Expty {_expr = (), _typ = (PT.ARRAY arrTyp uniqueId)})
+      return (Expty {_expr, _typ = (PT.ARRAY arrTyp uniqueId)})
     Nothing -> throwError (show pos <> " array type " <> S.unintern tyid <> " undefined")
     Just x  -> throwError (show pos <> " " <> S.unintern tyid
                                     <> " is not of type array, but of type " <> show x)
@@ -197,29 +208,33 @@ transExp' exData (Absyn.RecCreate tyid givens pos) = do
           sortedGivens  = List.sortOn Absyn.fieldTyp givens -- and error from there
       sortedGivenTypes <- traverse (\ (Absyn.Field sym exp pos) -> do
                                        e <- transExp' exData exp
-                                       return (sym, e^.typ, pos))
+                                       return (sym, e, pos))
                                    sortedGivens
       zipWithM_ (\ (_, recType)
                    (_, givenType, p) -> do
                     recTyp <- liftIO (actualType recType)
-                    gvnTyp <- liftIO (actualType givenType)
+                    gvnTyp <- liftIO (actualType (view typ givenType))
                     checkSameTyp recTyp gvnTyp p)
                 sortedRecType
                 sortedGivenTypes
-      return (Expty {_expr = (), _typ = PT.RECORD syms uniqueType})
+      _expr <- liftIO $ T.recCreate (view (_2 . expr) <$> sortedGivenTypes)
+      return (Expty {_expr = _expr
+                    , _typ = PT.RECORD syms uniqueType
+                    })
     Nothing -> throwError (show pos <> " record " <> S.unintern tyid <> " undefined")
     Just x  -> throwError (show pos <> " " <> S.unintern tyid
                                     <> " is not of type record, but of type " <> show x)
 
 transExp' exData (Absyn.Let decs exps pos) = do
   currentEnv <- get
-  transDec exData decs pos
+  expDecs    <- transDec exData decs pos
   case exps of
-    []   -> return (Expty {_expr = (), _typ = PT.NIL})
+    []   -> liftIO $ (\_expr -> Expty {_expr, _typ = PT.NIL}) <$> T.letExp expDecs []
     exps -> do
       expsTyped <- traverse (transExp' exData) exps
       put currentEnv
-      return (last expsTyped)
+      _expr <- liftIO (T.letExp expDecs (fmap (view expr) expsTyped))
+      return $ set expr _expr (last expsTyped)
 
 transVar :: MonadTran m => ExtraData -> Absyn.Var -> m VarTy
 transVar exData (Absyn.SimpleVar sym pos) = do
@@ -228,10 +243,11 @@ transVar exData (Absyn.SimpleVar sym pos) = do
   case envMap Map.!? sym of
     Nothing                  -> err " is not defined"
     Just v@(Env.FunEntry {}) -> err " is a function"
-    Just v@(Env.VarEntry {_ty}) -> do
+    Just v@(Env.VarEntry {_ty, _access}) -> do
       actualTy <- liftIO (actualType _ty)
+      _expr    <- T.simpleVar _access (exData^.level)
       return $ VarTy { _var  = set Env.ty actualTy v
-                     , _expr = ()
+                     , _expr
                      }
 
 transVar exData (Absyn.Subscript arrayType expInt pos) = do
@@ -280,12 +296,13 @@ transTy refMap (Absyn.RecordTy recs) = do
   unique <- fresh
   return (PT.RECORD (reverse xs) unique, refMap)
 
-transDec :: MonadTran m => ExtraData -> [Absyn.Dec] -> Absyn.Pos -> m ()
+transDec :: MonadTran m => ExtraData -> [Absyn.Dec] -> Absyn.Pos -> m [T.Exp]
 transDec exData decs pos = do
   transTypeDecs     exData typeDecs pos
   transFunDecsHead  exData funDecs  pos
   transVarDecs      exData varDecs  pos
   transFunDecsBody  exData funDecs  pos
+  undefined
   where
     typeDecs = filter isTypeDec     decs
     funDecs  = filter isFunctionDec decs
@@ -324,7 +341,7 @@ transFunDecsHead exData decs pos = traverse_ f decs
             label   <- liftIO Temp.newLabel
             escapes <- liftIO $ traverse (\(Absyn.FieldDec _ esc _ _) -> Ref.readIORef esc) fields
             lvl     <- liftIO $ T.newLevel (exData^.level) label escapes
-            modify (over em (Map.insert name (Env.FunEntry types x lvl)))
+            modify (over em (Map.insert name (Env.FunEntry types x lvl label)))
       case mtype of
         Nothing      -> putIn PT.UNIT
         Just symType ->
@@ -461,26 +478,29 @@ handleInfixExp :: MonadTran m
                => (Expty -> Absyn.Pos -> m ()) -- A function like checkInt
                -> ExtraData                    -- loop and level information
                -> Absyn.Exp                    -- left side of infix
+               -> Absyn.Op                     -- operation
                -> Absyn.Exp                    -- right side of infix
                -> Absyn.Pos                    -- the Posiiton
                -> m Expty
-handleInfixExp f inLoop left right pos = do
+handleInfixExp f inLoop left op right pos = do
   left'  <- transExp' inLoop left
   right' <- transExp' inLoop right
   f left' pos
   f right' pos
-  return (Expty {_expr = (), _typ = PT.INT})
+  _expr <- liftIO (T.infix' (left'^.expr) op (right'^.expr))
+  return (Expty {_expr, _typ = PT.INT})
 
 -- will become deprecated once we handle the intermediate stage
-handleInfixSame :: MonadTran m => ExtraData -> Absyn.Exp -> Absyn.Exp -> Absyn.Pos -> m Expty
-handleInfixSame inLoop left right pos = do
+handleInfixSame :: MonadTran m => ExtraData -> Absyn.Exp -> Absyn.Op -> Absyn.Exp -> Absyn.Pos -> m Expty
+handleInfixSame inLoop left op right pos = do
   left'  <- transExp' inLoop left
   right' <- transExp' inLoop right
   checkSame left' right' pos
-  return (Expty {_expr = (), _typ = PT.INT})
+  _expr <- liftIO (T.infix' (left'^.expr) op (right'^.expr))
+  return (Expty {_expr, _typ = PT.INT})
 
 handleInfixInt, handleInfixStrInt, handleInfixStr
-  :: MonadTran m => ExtraData -> Absyn.Exp -> Absyn.Exp -> Absyn.Pos -> m Expty
+  :: MonadTran m => ExtraData -> Absyn.Exp -> Absyn.Op -> Absyn.Exp -> Absyn.Pos -> m Expty
 handleInfixInt    = handleInfixExp checkInt
 handleInfixStr    = handleInfixExp checkStr
 handleInfixStrInt = handleInfixExp checkStrInt

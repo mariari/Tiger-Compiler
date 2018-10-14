@@ -8,6 +8,25 @@ module Semantic.Translate
   , newLevel
   , allocLocal
   , simpleVar
+  , Exp
+  , fieldVar
+  , subscript
+  , infix'
+  , intLit
+  , stringLit
+  , nil
+  , ifThenElse
+  , ifThen
+  , recCreate
+  , arrCreate
+  , negation
+  , assign
+  , break
+  , while
+  , sequence
+  , funcall
+  , letExp
+  , procEntryExit
   ) where
 
 import qualified Frame.CurrentMachine as F
@@ -17,7 +36,7 @@ import qualified AbstractSyntax       as Abs
 import           App.Environment
 import           Semantic.Fragment
 
-import Prelude hiding (sequence)
+import Prelude hiding (sequence, break)
 import Text.Show.Functions
 import Data.IORef
 import Data.Unique.Show
@@ -158,6 +177,7 @@ subscript arrExp lookupExp = trans <$> unEx arrExp <*> unEx lookupExp
       . Tree.Binop (Tree.Mem unLookup) Tree.Mul
       $ Tree.Const F.wordSize
 
+infix' :: Exp -> Abs.Op -> Exp -> IO Exp
 infix' left op right = do
   l <- unEx left
   r <- unEx right
@@ -268,6 +288,7 @@ assign left right = trans <$> unEx left <*> unEx right
   where
     trans unL unR = Nx (Tree.Move unL unR)
 
+break :: Temp.Label -> Exp
 break label = Nx (Tree.Jump (Tree.Name label) [label])
 
 while :: (MonadIO m, MonadError String m) => Exp -> Exp -> Temp.Label -> m Exp
@@ -305,3 +326,25 @@ funcall labelF levelF args currentLvl = do
       return . Ex
              . Tree.Call (Tree.Name labelF)
              $ link : unArgs
+
+letExp :: [Exp] -> [Exp] -> IO Exp
+
+letExp [] []     = return $ Nx (Tree.Exp (Tree.Const 0))
+letExp [] [body] = return body
+letExp decs []   = Nx . exSeq <$> traverse unNx decs
+letExp decs body = do
+  unDecs <- traverse unNx decs
+  unBody <- traverse unNx (init body)
+  unBodyL <- unEx (last body)
+  return . Ex
+         . Tree.ESeq (Tree.Seq (exSeq unDecs) (exSeq unBody))
+         $ unBodyL
+
+procEntryExit :: (MonadError String m, MonadIO m, EnvHasFrag s m) => Level -> Exp -> m ()
+procEntryExit TopLevel _ = throwError "procEntryExit passed a TopLevel"
+procEntryExit (Level {_frame = frame}) body = do
+  env    <- ask
+  unBody <- liftIO (unNx body)
+  liftIO . modifyIORef' (env^.frag)
+         . (:)
+         $ Proc {f = frame, body = Tree.Seq (Tree.Label (F.name frame)) unBody}

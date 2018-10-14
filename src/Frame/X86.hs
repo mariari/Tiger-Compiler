@@ -17,6 +17,7 @@ module Frame.X86
   , exp
   , wordSize
   , externalCall
+  , procEntryExit1
   ) where
 
 import Prelude hiding (exp)
@@ -42,11 +43,13 @@ makeLenses ''Frame
 
 type Regs = Registers
 data Registers = Reg
-  { _fp :: T.Temp } deriving Show
+  { _fp :: T.Temp
+  , _rv :: T.Temp
+  } deriving Show
 makeLenses ''Registers
 
 genRegisters :: IO Registers
-genRegisters = Reg <$> genFp
+genRegisters = Reg <$> genFp <*> T.newTemp
 
 genFp :: IO T.Temp
 genFp = T.newTemp
@@ -65,6 +68,9 @@ exp (InReg register) _ = Tree.Temp register
 
 externalCall :: Symbol -> [Tree.Exp] -> Tree.Exp
 externalCall name args = Tree.Call (Tree.Name (T.nameLabel name)) args
+
+-- fix up later
+procEntryExit1 _ body = body
 
 instance I.FrameFn Frame where
   name = name

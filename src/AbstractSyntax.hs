@@ -15,8 +15,8 @@ type Escape = Bool
 
 data Exp = Var Var
          | Nil                                   {-# UNPACK #-} !Pos
-         | IntLit !Integer                       {-# UNPACK #-} !Pos
-         | StringLit String                      {-# UNPACK #-} !Pos
+         | IntLit    {-# UNPACK #-} !Int         {-# UNPACK #-} !Pos
+         | StringLit {-# UNPACK #-} !String      {-# UNPACK #-} !Pos
          | Break                                 {-# UNPACK #-} !Pos
          | Sequence [Exp]                        {-# UNPACK #-} !Pos
          | Negation Exp                          {-# UNPACK #-} !Pos

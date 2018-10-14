@@ -4,6 +4,7 @@ module Semantic.Environment where
 
 import           Frame.X86
 import qualified Semantic.Translate as Trans
+import qualified Semantic.Temp      as Temp
 import qualified ProgramTypes       as PT
 import qualified AbstractSyntax     as Absyn
 
@@ -22,6 +23,7 @@ data Entry = VarEntry { _ty         :: !PT.Type
            | FunEntry { _formals :: ![PT.Type]
                       , _result  :: !PT.Type
                       , _level   :: !Trans.Level
+                      , _label   :: !Temp.Label
                       }
            deriving Show
 makeLenses ''Entry
