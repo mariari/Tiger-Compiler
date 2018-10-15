@@ -4,8 +4,9 @@
 
 module Semantic.Analysis where
 
---import TigerParser
+import TigerParser
 import App.Environment
+import App.Initialize
 import qualified ProgramTypes         as PT
 import qualified AbstractSyntax       as Absyn
 import qualified Semantic.Environment as Env
@@ -298,11 +299,11 @@ transTy refMap (Absyn.RecordTy recs) = do
 
 transDec :: MonadTran m => ExtraData -> [Absyn.Dec] -> Absyn.Pos -> m [T.Exp]
 transDec exData decs pos = do
-  transTypeDecs     exData typeDecs pos
-  transFunDecsHead  exData funDecs  pos
-  transVarDecs      exData varDecs  pos
-  transFunDecsBody  exData funDecs  pos
-  undefined
+  _  <- transTypeDecs     exData typeDecs pos
+  _  <- transFunDecsHead  exData funDecs  pos
+  t3 <- transVarDecs      exData varDecs  pos
+  _  <- transFunDecsBody  exData funDecs  pos
+  return t3
   where
     typeDecs = filter isTypeDec     decs
     funDecs  = filter isFunctionDec decs
@@ -311,16 +312,19 @@ transDec exData decs pos = do
 transVarDecs exData decs pos = traverse f decs
   where
     f (Absyn.VarDec sym escRef mType exp _) = do
-      Expty {_typ}     <- transExp' exData exp
-      trans            <- get
-      (exData, access) <- allocLocal exData escRef
-      let newMap = modify
-                 . over em
-                 . Map.insert sym
-                 $ Env.VarEntry { _ty         = _typ
-                                , _modifiable = True
-                                , _access     = access
-                                }
+      Expty {_typ, _expr} <- transExp' exData exp
+      trans               <- get
+      (exData, access)    <- allocLocal exData escRef
+      let newMap = do
+            modify
+              . over em
+              . Map.insert sym
+              $ Env.VarEntry { _ty         = _typ
+                             , _modifiable = True
+                             , _access     = access
+                             }
+            simVar <- T.simpleVar access (exData^.level)
+            liftIO $ T.assign simVar _expr
       case mType of
         Nothing  -> newMap
         Just sty ->
@@ -328,7 +332,7 @@ transVarDecs exData decs pos = traverse f decs
             Nothing -> throwError (show pos <> " type " <> S.unintern sty <> " is not defined ")
             Just x -> do
               checkSameTyp x _typ pos
-              throwError (show pos <> " " <> show _typ <> " is not " <> show x)
+              newMap
     f _ = throwError (show pos <> " violated precondition ")
 
 transFunDecsHead :: (MonadTran m, Traversable t, Show a) => ExtraData -> t Absyn.Dec -> a -> m ()
@@ -358,12 +362,13 @@ transFunDecsBody exData decs pos = traverse_ f decs
     f (Absyn.FunDec name fields mtype body pos) = do
       trans <- get
       case trans^.em.at name of
-        Just (Env.FunEntry {_result, _level}) -> do
-          (exData, types) <- allocFields exData fields
-          Expty {_typ}    <- locallyInsert (transExp' exData body) types
-          bodyType        <- liftIO (actualType _typ)
-          trueResultType  <- liftIO (actualType _result)
+        Just (Env.FunEntry {_result, _level, _label}) -> do
+          (exData, types)    <- allocFields exData fields
+          Expty {_typ,_expr} <- locallyInsert (transExp' exData body) types
+          bodyType           <- liftIO (actualType _typ)
+          trueResultType     <- liftIO (actualType _result)
           checkSameTyp trueResultType bodyType pos
+          T.functionDec _level _expr
         _ -> throwError (show pos <> " transFunDecsHead did not put the function in the map")
     f _ = throwError (show pos <> " internal precondition violated at transFunDecBody")
 

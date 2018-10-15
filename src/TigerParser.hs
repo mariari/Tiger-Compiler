@@ -200,7 +200,7 @@ break' = (getLineCol >>= return . Break) <* reserved "break"
 intLit = do
   pos <- getLineCol
   int <- integer
-  return $ IntLit int pos
+  return $ IntLit (fromInteger int) pos
 
 
 -- Haskells string has the same escape characters I think!

@@ -13,6 +13,7 @@ module Frame.X86
   , Registers
   , Regs
   , fp
+  , rv
   , genRegisters
   , exp
   , wordSize

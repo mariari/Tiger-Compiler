@@ -27,6 +27,7 @@ module Semantic.Translate
   , funcall
   , letExp
   , procEntryExit
+  , functionDec
   ) where
 
 import qualified Frame.CurrentMachine as F
@@ -316,7 +317,9 @@ sequence xs = do
 
 funcall :: (EnvHasRegs env m, MonadIO m, MonadError String m)
         => Temp.Label -> Level -> [Exp] -> Level -> m Exp
-funcall _       TopLevel _ _          = throwError "Translate funcall was passed a TopLevel"
+funcall labelF TopLevel args currentLvl = do
+  unArgs <- liftIO (traverse unEx args)
+  return . Ex $ F.externalCall (Temp.fromLabel labelF) unArgs
 funcall labelF levelF args currentLvl = do
   unArgs <- liftIO (traverse unEx args)
   case _parent levelF of
@@ -328,7 +331,6 @@ funcall labelF levelF args currentLvl = do
              $ link : unArgs
 
 letExp :: [Exp] -> [Exp] -> IO Exp
-
 letExp [] []     = return $ Nx (Tree.Exp (Tree.Const 0))
 letExp [] [body] = return body
 letExp decs []   = Nx . exSeq <$> traverse unNx decs
@@ -340,7 +342,7 @@ letExp decs body = do
          . Tree.ESeq (Tree.Seq (exSeq unDecs) (exSeq unBody))
          $ unBodyL
 
-procEntryExit :: (MonadError String m, MonadIO m, EnvHasFrag s m) => Level -> Exp -> m ()
+procEntryExit :: (EnvHasFrag env m, MonadError String m, MonadIO m) => Level -> Exp -> m ()
 procEntryExit TopLevel _ = throwError "procEntryExit passed a TopLevel"
 procEntryExit (Level {_frame = frame}) body = do
   env    <- ask
@@ -348,3 +350,14 @@ procEntryExit (Level {_frame = frame}) body = do
   liftIO . modifyIORef' (env^.frag)
          . (:)
          $ Proc {f = frame, body = Tree.Seq (Tree.Label (F.name frame)) unBody}
+
+functionDec :: (EnvHasFrag env m, EnvHasRegs env m, MonadError String m, MonadIO m)
+            => Level -> Exp -> m ()
+functionDec TopLevel  _ = throwError "functionDec passed a top level!"
+functionDec level body = do
+  unBody <- liftIO (unEx body)
+  env    <- ask
+  procEntryExit level
+    . Nx
+    . Tree.Move (Tree.Temp (view (regs . F.rv) env))
+    $ F.procEntryExit1 (_frame level) unBody
