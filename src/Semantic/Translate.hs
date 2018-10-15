@@ -32,7 +32,7 @@ module Semantic.Translate
 
 import qualified Frame.CurrentMachine as F
 import qualified Semantic.Temp        as Temp
-import qualified Semantic.IR.Tree     as Tree
+import qualified IR.Tree              as Tree
 import qualified AbstractSyntax       as Abs
 import           App.Environment
 import           Semantic.Fragment

@@ -27,9 +27,9 @@ import Control.Monad(foldM)
 import System.IO.Unsafe(unsafePerformIO)
 import Data.Symbol(Symbol)
 
-import qualified Semantic.Temp    as T
-import qualified Frame.Interface  as I
-import qualified Semantic.IR.Tree as Tree
+import qualified Semantic.Temp   as T
+import qualified Frame.Interface as I
+import qualified IR.Tree         as Tree
 
 data Access = InFrame Int
             | InReg   T.Temp

@@ -16,12 +16,12 @@ type Escape = Bool
 data Exp = Var Var
          | Nil                                   {-# UNPACK #-} !Pos
          | IntLit    {-# UNPACK #-} !Int         {-# UNPACK #-} !Pos
-         | StringLit {-# UNPACK #-} !String      {-# UNPACK #-} !Pos
+         | StringLit !String                     {-# UNPACK #-} !Pos
          | Break                                 {-# UNPACK #-} !Pos
          | Sequence [Exp]                        {-# UNPACK #-} !Pos
          | Negation Exp                          {-# UNPACK #-} !Pos
          | Funcall !Symbol [Exp]                 {-# UNPACK #-} !Pos
-         | Infix' Exp Op Exp                     {-# UNPACK #-} !Pos
+         | Infix' Exp !Op Exp                    {-# UNPACK #-} !Pos
          | ArrCreate !Symbol Exp Exp             {-# UNPACK #-} !Pos
          | RecCreate !Symbol [Field]             {-# UNPACK #-} !Pos
          | Assign Var Exp                        {-# UNPACK #-} !Pos
