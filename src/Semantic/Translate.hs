@@ -101,9 +101,8 @@ staticLink TopLevel _ = throwError " staticLink was passed a TopLevel!!!"
 staticLink _ TopLevel = throwError " staticLink was passed a TopLevel!!!"
 
 staticLink curr@(Level {}) var@(Level {_unique = uniqVar})
-  | _unique curr == uniqVar = do
-      env <- ask
-      return (Tree.Temp (view (regs . F.fp) env))
+  | _unique curr == uniqVar =
+      Tree.Temp . view (regs . F.fp) <$> ask
   | otherwise =
     case F.formals (_frame curr) of
       []     -> throwError " static link can't be found in formals "

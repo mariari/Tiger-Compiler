@@ -40,6 +40,7 @@ library
     , Semantic.Temp
     , Semantic.Translate
     , Semantic.Fragment
+    , Semantic.Escape
     , App.Environment
     , App.Initialize
     , IR.Tree
