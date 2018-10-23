@@ -28,6 +28,8 @@ module Semantic.Translate
   , letExp
   , procEntryExit
   , functionDec
+  , unEx
+  , unNx
   ) where
 
 import qualified Frame.CurrentMachine as F

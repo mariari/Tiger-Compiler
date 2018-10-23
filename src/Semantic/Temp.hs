@@ -21,7 +21,7 @@ instance Show Temp where
   show (T x) = "t" <> show (hashUnique x)
 
 -- Label Type --------------------------------------------------------
-newtype Label = L Symbol deriving Show
+newtype Label = L Symbol deriving (Show,Eq,Ord)
 
 newLabel :: IO Label
 newLabel = (\u -> L (S.intern $ "L" <> show (hashUnique u))) <$> newUnique

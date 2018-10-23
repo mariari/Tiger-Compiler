@@ -4,37 +4,57 @@ module IR.Canonical
   , traceSchedule
   ) where
 
-
 import           IR.Tree
 import qualified Semantic.Temp as Temp
 
--- | removes ESeqs and moves Call to the top Level
+import qualified Data.Map.Strict as M
+import qualified Data.Sequence   as S
+import           Data.Sequence(Seq(..),(><))
+import           Data.Foldable(toList)
+
+-- | from an arbitrary statement produce a list of cleaned trees that satisfies
+-- the following properties
+-- 1. no Seq or ESeq
+-- 2. the parent of every Call is an Exp or a Move (Temp t)
 linearize :: Stmt -> IO [Stmt]
 linearize stm = (\s -> linear s []) <$> (doStm stm)
 
-traceSchedule :: [[Stmt]] -> Temp.Label -> [Stmt]
-traceSchedule = undefined
-
-basicBlocks :: [Stmt] -> IO ([[Stmt]], Temp.Label)
+-- | from a cleaned try (lineralized) produce a block with the following properties
+-- 1. the properties from lineraize
+-- 2. Every blcok begins with a label
+-- 3. A label appears only at the beginning of a block
+-- 4. any Jump or CJump is the last stm in a block
+-- 5. Every block ends iwht a Jump or a CJump
+basicBlocks :: [Stmt] -> IO ([Seq Stmt], Temp.Label)
 basicBlocks stms = do
   done <- Temp.newLabel
   let blocks (x@(Label {}) : xs) blist = do
-        let endBlock stms currBlock = blocks stms (reverse currBlock : blist)
+        let endBlock stms currBlock = blocks stms (currBlock : blist)
 
-            next :: [Stmt] -> [Stmt] -> IO [[Stmt]] -- 2nd arg is the currentBlock
-            next (x@(Jump {})  : xs) = endBlock xs . (x :)
-            next (x@(CJump {}) : xs) = endBlock xs . (x :)
+            next :: [Stmt] -> Seq Stmt -> IO [Seq Stmt] -- 2nd arg is the currentBlock
+            next (x@(Jump {})  : xs) = endBlock xs . (:|> x)
+            next (x@(CJump {}) : xs) = endBlock xs . (:|> x)
             next xs@(Label l   : _)  = next (Jump (Name l) [l] : xs)
-            next (x:xs)              = next xs . (x :)
+            next (x:xs)              = next xs . (:|> x)
             next []                  = next [Jump (Name done) [done]]
 
-        next xs [x] -- there is probably a nice way to do this with HOF that I don't see
+        next xs (S.singleton x) -- there is probably a nice way to do this with HOF that I don't see
       blocks [] blist = return (reverse blist)
       blocks stms blist = do
         l <- Temp.newLabel
         blocks (Label l : stms) blist
   blocked <- blocks stms []
   return(blocked, done)
+
+-- | from a block with properties 1-5, along with an exit label
+-- produce a list of stms s.t.
+-- 1. all properties of basicBlock apply
+-- 2. Every CJump _ t f is followed immediately by the f Label
+traceSchedule :: ([Seq Stmt], Temp.Label) -> IO [Stmt]
+traceSchedule (blocks, done) = toList . (:|> doneL) <$> getNext table blocks
+  where
+    table = (foldr enterBlock mempty blocks)
+    doneL = (Label done)
 -- Helper functions --------------------------------------------------------------------------------
 
 -- | given a Stmt and an Exp, check if they *definitely* commute
@@ -98,7 +118,45 @@ doExp (Call e el)   = reorderExp (e:el) (\(e:el) -> Call e el)
 doExp (ESeq s e)    = (\s (s',x) -> (combStm s s', x)) <$> doStm s <*> doExp e
 doExp e             = reorderExp [] (\[] -> e)
 
-
 linear :: Stmt -> [Stmt] -> [Stmt]
 linear (Seq x y) = linear x . linear y
 linear x         = (x :)
+
+
+-- helper functions for traceSchedule -------------------------------------------------------
+enterBlock :: Seq Stmt -> M.Map Temp.Label (Seq Stmt) -> M.Map Temp.Label (Seq Stmt)
+enterBlock x@(Label l :<| _) table = M.insert l x table
+enterBlock _                 table = table
+
+trace :: M.Map Temp.Label (Seq Stmt) -> Seq Stmt -> [Seq Stmt] -> IO (Seq Stmt)
+trace t x@(Label lab :<| _) rest = f x
+  where
+    table = M.insert lab Empty t -- Mark the label, l, as traced!
+    f (most :|> Jump (Name l) _)   = handleJumpName most l
+    f (most :|> CJump opr a b t f) = handleCJump most opr a b t f
+    f (most :|> Jump {})           = fmap (x ><) (getNext table rest)
+    f x                            = error ("f inside of trace didn't have a jump at the end of the block" <> show x)
+    handleJumpName most l =
+      case table M.!? l of
+        Just x'@(_ :|> _) -> fmap (most ><) (trace table x' rest) -- most removes the Jump label
+        _                 -> fmap (x ><)    (getNext table rest)
+    handleCJump most opr a b t f =
+      case (table M.!?t, table M.!? f) of
+        (_, Just x'@(_ :|> _)) -> fmap (x ><) (trace table x' rest) -- false first, closer to machine semantics
+        (Just x'@(_ :|> _), _) -> fmap (most :|> CJump (notRel opr) a b f t ><) (trace table x' rest)
+        _  -> do
+          f' <- Temp.newLabel
+          next <- getNext table rest
+          return (most >< S.fromList [ CJump opr a b t f'
+                                     , Label f'
+                                     , Jump (Name f) [f]]
+                       >< next)
+
+trace _ _ _ = error "trace must take a stmt list without a label first"
+
+getNext :: M.Map Temp.Label (Seq Stmt) -> [Seq Stmt] -> IO (Seq Stmt)
+getNext table [] = return Empty
+getNext table (x@(Label l :<| _) : xs) = case table M.!? l of
+  Just (_ :|> _) -> trace table x xs
+  _              -> getNext table xs
+getNext _ _ = error "getNext was given a stmt list without a label first"

@@ -34,3 +34,15 @@ data BinOp = Plus
            | ARShift
            | Xor
            deriving (Eq,Show,Enum)
+
+notRel :: Relop -> Relop
+notRel Eq  = Ne
+notRel Ne  = Eq
+notRel Lt  = Ge
+notRel Ge  = Lt
+notRel Gt  = Le
+notRel Le  = Gt
+notRel ULt = UGe
+notRel UGe = ULt
+notRel UGt = ULe
+notRel ULe = UGt
