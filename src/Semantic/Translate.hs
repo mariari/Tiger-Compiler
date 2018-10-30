@@ -45,7 +45,6 @@ import Data.IORef
 import Data.Unique.Show
 import Control.Monad.Except hiding (sequence)
 import Control.Monad.Reader hiding (sequence)
-import Data.Semigroup ((<>))
 import Data.Symbol    (unintern,Symbol)
 import Data.List      (elemIndex, find)
 import Control.Monad  (zipWithM)

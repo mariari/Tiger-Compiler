@@ -12,8 +12,6 @@ type Depth = Int
 
 type EscEnvMap = Map.Map S.Symbol (Depth, R.IORef Bool)
 
-emptyMap = (mempty,0)
-
 traverseExp :: (EscEnvMap, Depth) -> Abs.Exp -> IO ()
 traverseExp _  (Abs.Nil       {})        = return ()
 traverseExp _  (Abs.IntLit    {})        = return ()

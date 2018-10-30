@@ -9,7 +9,7 @@ import qualified Semantic.Temp as Temp
 
 import qualified Data.Map.Strict as M
 import qualified Data.Sequence   as S
-import           Data.Sequence(Seq(..),(><))
+import           Data.Sequence(Seq(..))
 import           Data.Foldable(toList)
 
 -- | from an arbitrary statement produce a list of cleaned trees that satisfies
@@ -53,8 +53,8 @@ basicBlocks stms = do
 traceSchedule :: ([Seq Stmt], Temp.Label) -> IO [Stmt]
 traceSchedule (blocks, done) = toList . (:|> doneL) <$> getNext table blocks
   where
-    table = (foldr enterBlock mempty blocks)
-    doneL = (Label done)
+    table = foldr enterBlock mempty blocks
+    doneL = Label done
 -- Helper functions --------------------------------------------------------------------------------
 
 -- | given a Stmt and an Exp, check if they *definitely* commute
@@ -134,23 +134,24 @@ trace t x@(Label lab :<| _) rest = f x
     table = M.insert lab Empty t -- Mark the label, l, as traced!
     f (most :|> Jump (Name l) _)   = handleJumpName most l
     f (most :|> CJump opr a b t f) = handleCJump most opr a b t f
-    f (most :|> Jump {})           = fmap (x ><) (getNext table rest)
-    f x                            = error ("f inside of trace didn't have a jump at the end of the block" <> show x)
+    f (most :|> Jump {})           = fmap (x <>) (getNext table rest)
+    f x                            = error ("f of trace didn't have a jump at the end of the block" <> show x)
     handleJumpName most l =
       case table M.!? l of
-        Just x'@(_ :|> _) -> fmap (most ><) (trace table x' rest) -- most removes the Jump label
-        _                 -> fmap (x ><)    (getNext table rest)
+        Just x'@(_ :|> _) -> fmap (most <>) (trace table x' rest) -- most removes the Jump label
+        _                 -> fmap (x <>)    (getNext table rest)
     handleCJump most opr a b t f =
       case (table M.!?t, table M.!? f) of
-        (_, Just x'@(_ :|> _)) -> fmap (x ><) (trace table x' rest) -- false first, closer to machine semantics
-        (Just x'@(_ :|> _), _) -> fmap (most :|> CJump (notRel opr) a b f t ><) (trace table x' rest)
+        -- handle the false case first to better mask a real instruction jump
+        (_, Just x'@(_ :|> _)) -> fmap (x <>) (trace table x' rest)
+        (Just x'@(_ :|> _), _) -> fmap ((most :|> CJump (notRel opr) a b f t) <>) (trace table x' rest)
         _  -> do
           f' <- Temp.newLabel
           next <- getNext table rest
-          return (most >< S.fromList [ CJump opr a b t f'
+          return (most <> S.fromList [ CJump opr a b t f'
                                      , Label f'
                                      , Jump (Name f) [f]]
-                       >< next)
+                       <> next)
 
 trace _ _ _ = error "trace must take a stmt list without a label first"
 

@@ -73,7 +73,7 @@ externalCall name args = Tree.Call (Tree.Name (T.nameLabel name)) args
 -- fix up later
 procEntryExit1 _ body = body
 
-instance I.FrameFn Frame where
+instance I.FrameInter Frame Access where
   name = name
   newFrame label bs = do
     (formalsAlloc, formals) <- foldM allocFormal (0,[]) bs
@@ -82,8 +82,6 @@ instance I.FrameFn Frame where
                   , _localsAlloc  = 0
                   , name          = label
                   })
-
-instance I.FrameInter Frame Access where
   formals = formals
   allocLocal f False = (\x -> (f, InReg x)) <$> T.newTemp
   allocLocal f True  = return (f', InFrame (f'^.localsAlloc * wordSize))

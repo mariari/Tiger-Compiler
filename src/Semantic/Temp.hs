@@ -8,7 +8,6 @@ module Semantic.Temp
   ) where
 
 import Data.Symbol as S
-import Data.Semigroup((<>))
 import Data.Unique.Show
 
 -- Temp Type ----------------------------------------------------------
@@ -21,7 +20,7 @@ instance Show Temp where
   show (T x) = "t" <> show (hashUnique x)
 
 -- Label Type --------------------------------------------------------
-newtype Label = L Symbol deriving (Show,Eq,Ord)
+newtype Label = L Symbol deriving (Eq,Ord)
 
 newLabel :: IO Label
 newLabel = (\u -> L (S.intern $ "L" <> show (hashUnique u))) <$> newUnique
@@ -31,3 +30,6 @@ nameLabel = L
 
 fromLabel :: Label -> Symbol
 fromLabel (L s) = s
+
+instance Show Label where
+  show (L s) = S.unintern s

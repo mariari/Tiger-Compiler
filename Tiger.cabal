@@ -57,6 +57,7 @@ library
     , containers
     , unordered-containers
     , lens
+    , deepseq
   default-language: Haskell2010
   default-extensions:
                BangPatterns

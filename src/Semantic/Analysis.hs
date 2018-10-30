@@ -15,7 +15,6 @@ import qualified Semantic.Temp        as Temp
 
 import           Control.Lens
 import           Data.Maybe
-import           Data.Semigroup((<>))
 import qualified Data.IORef      as Ref
 import qualified Data.List       as List
 import qualified Data.Symbol     as S

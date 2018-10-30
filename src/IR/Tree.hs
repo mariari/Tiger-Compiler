@@ -29,10 +29,10 @@ data BinOp = Plus
            | Div
            | And
            | Or
+           | Xor
            | LShift
            | RShift
            | ARShift
-           | Xor
            deriving (Eq,Show,Enum)
 
 notRel :: Relop -> Relop

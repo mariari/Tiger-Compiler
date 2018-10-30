@@ -16,7 +16,7 @@ main = test1 "./test/merge.tig" >>= print
 test1 :: FilePath -> IO (Env, Expty)
 test1 str = do
   Right x <- parseTigerFile str
-  traverseExp emptyMap x
+  traverseExp (mempty,0) x
   env   <- genEnv
   baseE <- baseEmap
   exp   <- transExp baseTmap baseE x env
