@@ -1,7 +1,7 @@
 module App.Initialize where
 
 import App.Environment
-import Frame.CurrentMachine
+import Frame.CurrentMachineTyp
 
 import Data.IORef
 

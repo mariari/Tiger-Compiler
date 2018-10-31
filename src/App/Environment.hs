@@ -6,7 +6,7 @@ module App.Environment where
 import Control.Lens
 import Data.IORef.Show
 
-import Frame.CurrentMachine
+import Frame.CurrentMachineTyp
 import Semantic.Fragment
 
 data Env = Env

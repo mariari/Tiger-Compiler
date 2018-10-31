@@ -10,15 +10,19 @@ module Frame.X86
   , I.allocLocal
   , Frame
   , FrameI(..)
-  , Registers
-  , Regs
   , fp
   , rv
-  , genRegisters
+  , sp
+  , rax
+  , Registers
+  , Regs
+  , rdx
   , exp
   , wordSize
   , externalCall
   , procEntryExit1
+  , argumentRegs
+  , callerSaved
   ) where
 
 import Prelude hiding (exp)
@@ -26,37 +30,31 @@ import Control.Lens
 import Control.Monad(foldM)
 import System.IO.Unsafe(unsafePerformIO)
 import Data.Symbol(Symbol)
+import Control.Monad.Reader
 
 import qualified Semantic.Temp   as T
 import qualified Frame.Interface as I
 import qualified IR.Tree         as Tree
+import Frame.X86Typ
+import App.Environment
 
-data Access = InFrame Int
-            | InReg   T.Temp
-            deriving Show
+callerSaved :: (MonadReader s m, HasRegs s Registers) => m [T.Temp]
+callerSaved = do
+  env <- ask
+  return $ fmap (\x -> view (regs . x) env) [rax, rcx, rdx, r8, r9, r10, r11]
 
-data Frame = Frame { formals       :: [Access]
-                   , _formalsAlloc :: Int
-                   , _localsAlloc  :: Int
-                   , name          :: T.Label
-                   } deriving Show
-makeLenses ''Frame
+calleeSaved :: (MonadReader s m, HasRegs s Registers) => m [T.Temp]
+calleeSaved = do
+  env <- ask
+  return $ fmap (\x -> view (regs . x) env) [sp, fp, rbx, rdx, rdi, rsi, r12, r13, r14, r15]
 
-type Regs = Registers
-data Registers = Reg
-  { _fp :: T.Temp
-  , _rv :: T.Temp
-  } deriving Show
-makeLenses ''Registers
-
-genRegisters :: IO Registers
-genRegisters = Reg <$> genFp <*> T.newTemp
-
-genFp :: IO T.Temp
-genFp = T.newTemp
+argumentRegs :: (MonadReader s m, HasRegs s Registers) => m [T.Temp]
+argumentRegs = do
+  env <- ask
+  return $ fmap (\x -> view (regs . x) env) [rdi, rsi, rdx, rcx, r8, r9]
 
 wordSize :: Int
-wordSize = 4
+wordSize = 8
 
 allocFormal (allocd, xs) False = (\x -> (allocd, InReg x : xs)) <$> T.newTemp
 allocFormal (allocd, xs) True  = return (succAlloc, InFrame (succAlloc * wordSize + wordSize) : xs)

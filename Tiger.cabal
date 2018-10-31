@@ -45,6 +45,8 @@ library
     , App.Initialize
     , IR.Tree
     , IR.Canonical
+    , Frame.CurrentMachineTyp
+    , Frame.X86Typ
   other-modules:
       Paths_Tiger
   hs-source-dirs:

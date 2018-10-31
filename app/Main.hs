@@ -17,7 +17,7 @@ test1 :: FilePath -> IO (Env, Expty)
 test1 str = do
   Right x <- parseTigerFile str
   traverseExp (mempty,0) x
-  env   <- genEnv
+  env   <- genEnv -- keep this around after running exp
   baseE <- baseEmap
   exp   <- transExp baseTmap baseE x env
   return (env,exp)

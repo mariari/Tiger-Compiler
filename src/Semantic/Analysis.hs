@@ -4,7 +4,6 @@
 
 module Semantic.Analysis where
 
-import TigerParser
 import App.Environment
 import App.Initialize
 import qualified ProgramTypes         as PT
