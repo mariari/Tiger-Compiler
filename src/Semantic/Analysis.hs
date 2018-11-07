@@ -11,6 +11,7 @@ import qualified AbstractSyntax       as Absyn
 import qualified Semantic.Environment as Env
 import qualified Semantic.Translate   as T
 import qualified Semantic.Temp        as Temp
+import qualified Semantic.Fragment    as F
 
 import           Control.Lens
 import           Data.Maybe
@@ -73,13 +74,15 @@ runMonadTran :: Env.TypeMap
 runMonadTran tm em env f = runReaderT (runExceptT (runStateT f trans)) env
   where trans = Trans {_tm = tm, _em = em, _uniq = 0}
 
-transExp :: Env.TypeMap -> Env.EntryMap -> Absyn.Exp -> Env -> IO Expty
+transExp :: Env.TypeMap -> Env.EntryMap -> Absyn.Exp -> Env -> IO [F.Frag]
 transExp tm em absyn env = do
   mainLevel <- T.mainLevel
   x <- runMonadTran tm em env (transExp' (Ex {_inLoop = Nothing, _level = mainLevel}) absyn)
   case x of
     Left a          -> error a
-    Right (expt,tl) -> return expt
+    Right (expt,tl) -> do
+      runExceptT (runReaderT (T.procEntryExit mainLevel (expt^.expr)) env)
+      Ref.readIORef (env^.frag)
 
 transExp' :: MonadTran m => ExtraData -> Absyn.Exp -> m Expty
 transExp' _ (Absyn.IntLit x _)    = return (Expty {_expr = T.intLit x, _typ = PT.INT})

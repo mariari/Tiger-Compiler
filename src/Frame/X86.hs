@@ -21,6 +21,7 @@ module Frame.X86
   , wordSize
   , externalCall
   , procEntryExit1
+  , procEntryExit2
   , argumentRegs
   , callerSaved
   ) where
@@ -32,9 +33,10 @@ import System.IO.Unsafe(unsafePerformIO)
 import Data.Symbol(Symbol)
 import Control.Monad.Reader
 
-import qualified Semantic.Temp   as T
-import qualified Frame.Interface as I
-import qualified IR.Tree         as Tree
+import qualified Semantic.Temp       as T
+import qualified Frame.Interface     as I
+import qualified IR.Tree             as Tree
+import qualified Generation.Assembly as A
 import Frame.X86Typ
 import App.Environment
 
@@ -70,6 +72,13 @@ externalCall name args = Tree.Call (Tree.Name (T.nameLabel name)) args
 
 -- fix up later
 procEntryExit1 _ body = body
+
+-- A very bare bones version of procEntryexit2
+procEntryExit2 f body = do
+  env        <- ask
+  caleesaved <- callerSaved
+  return A.Oper {A.assem = "", A.dsts = [], A.srcs = env^.regs.rv : caleesaved, A.jump = Just []}
+--  T.new
 
 instance I.FrameInter Frame Access where
   name = name

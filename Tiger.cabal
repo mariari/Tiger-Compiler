@@ -47,6 +47,7 @@ library
     , IR.Canonical
     , Frame.CurrentMachineTyp
     , Frame.X86Typ
+    , Generation.Assembly
   other-modules:
       Paths_Tiger
   hs-source-dirs:
@@ -60,6 +61,7 @@ library
     , unordered-containers
     , lens
     , deepseq
+    , fgl
   default-language: Haskell2010
   default-extensions:
                BangPatterns

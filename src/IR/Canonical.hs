@@ -150,7 +150,7 @@ trace t x@(Label lab :<| _) rest = f x
           next <- getNext table rest
           return (most <> S.fromList [ CJump opr a b t f'
                                      , Label f'
-                                     , Jump (Name f) [f]]
+                                     , Jump (Name f) [f] ]
                        <> next)
 
 trace _ _ _ = error "trace must take a stmt list without a label first"

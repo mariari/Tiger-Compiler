@@ -63,22 +63,22 @@ defOp :: Instr
 defOp = Oper { assem = "", srcs = [], dsts = [], jump = Nothing}
 
 -- Munches a mem call, is used in both munchStm and munchExp
-munchMem x r = case x of
+munchMem x e r = case x of
   T.Mem (T.Binop (T.Temp s)  T.Plus  (T.Const c)) -> handleTempConst r s c
   T.Mem (T.Binop (T.Const c) T.Plus  (T.Temp s))  -> handleTempConst r s c
   T.Mem (T.Binop (T.Temp s)  T.Minus (T.Const c)) -> handleTempConst r s (-1 * c)
     -- don't handle the minus with const first as it needs to be done explicitly
   T.Mem (T.Binop (T.Temp c)  T.Plus  (T.Temp s))  ->
     emit $ defOp { assem = "MOVQ `d0, [`s0+`s1]\n"
-                 , srcs  = [s]
+                 , srcs  = [c,s]
                  , dsts  = [r]
                  }
   T.Mem (T.Binop (T.Temp c) T.Minus (T.Temp s)) ->
     emit $ defOp { assem = "MOVQ `d0, [`s0-`s1]\n"
-                 , srcs  = [s]
+                 , srcs  = [c,s]
                  , dsts  = [r]
                  }
-  e -> do
+  _ -> do
     me <- munchExp e
     emit $ defOp { assem = "MOVQ `d0, `s0\n"
                  , srcs  = [me]
@@ -103,16 +103,16 @@ munchStm (T.CJump relop e1 e2 t f) = do
                }
 munchStm (T.Jump (T.Name j) ls) =
   emit $ defOp { assem = "JMP `j0\n"
-               , jump = Just [j] }
+               , jump = Just [j]
+               }
 munchStm (T.Jump e ls) = do
-  me <- munchExp e
+  munchExp e
   emit $ defOp { assem = "JMP `j0\n"
-              , srcs  = [me]
-              , jump  = Just ls
-              }
+               , jump  = Just ls
+               }
 -- time for the big set of moves
 munchStm (T.Move (T.Temp d) (T.Temp s)) = emit Move {assem = "MOVQ `d0, `s0", dst = d, src = s}
-munchStm (T.Move (T.Temp d) x)          = munchMem x d
+munchStm (T.Move (T.Temp d) x)          = munchMem x x d
 munchStm (T.Move (T.Mem (T.Temp d)) e) = do
   me <- munchExp e
   emit $ defOp { assem = "MOVQ QWORD PTR [`d0], `s0\n"
@@ -129,7 +129,7 @@ munchStm (T.Move (T.Mem (T.Binop (T.Temp d) T.Plus (T.Const c1))) (T.Const c2)) 
 munchStm (T.Move (T.Mem (T.Binop (T.Const c1) T.Plus (T.Temp d))) (T.Const c2)) = handleMemTwoConst d c1 c2
 munchStm (T.Move (T.Mem (T.Binop (T.Temp d) T.Plus (T.Const c))) e)  = handleMemConst d e c
 munchStm (T.Move (T.Mem (T.Binop (T.Const c) T.Plus (T.Temp d))) e)  = handleMemConst d e c
-munchStm (T.Move (T.Mem (T.Binop (T.Const c) T.Minus (T.Temp d))) e) = handleMemConst d e c
+munchStm (T.Move (T.Mem (T.Binop (T.Temp d) T.Minus (T.Const c))) e) = handleMemConst d e (-c)
 munchStm (T.Move (T.Mem d) e) = do
   md <- munchExp d
   me <- munchExp e
@@ -167,11 +167,11 @@ handleMemTwoConst d c1 c2 = do
 munchExp :: MonadGen m => T.Exp -> m Temp
 munchExp (T.ESeq s e) = munchStm s >> munchExp e
 munchExp (T.Temp t)   = return t
-munchExp x@(T.Mem {}) = result (munchMem x)
+munchExp x@(T.Mem e) = result (munchMem x e)
 munchExp (T.Const c)  = result $ \r ->
-  emit $ defOp { assem = "MOVQ `d0, " <> show c <> "\n"
-               , dsts  = [r]
-               }
+  emit defOp { assem = "MOVQ `d0, " <> show c <> "\n"
+             , dsts  = [r]
+             }
 munchExp (T.Name l) = result $ \r ->
   emit $ defOp { assem = "LEA `d0 [" <> show l <> "]\n"
                , dsts  = [r]
