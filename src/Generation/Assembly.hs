@@ -21,6 +21,7 @@ data Instr =
          , dst   :: Temp
          , src   :: Temp
          }
+  deriving Show
 
 -- force is to stop space leaks with the index function!
 format :: (Temp -> String) -> Instr -> String
