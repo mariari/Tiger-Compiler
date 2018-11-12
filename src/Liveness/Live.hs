@@ -2,7 +2,7 @@ module Liveness.Live --(interferenceGraph) where
   where
 
 import qualified Data.Map.Strict as M
-import qualified Data.Set as S
+import           Data.Set(unions, (\\), union, Set(..), fromList)
 import           Data.Maybe
 import           Data.Foldable(foldl')
 import           Data.Graph.Inductive.Graph
@@ -12,7 +12,7 @@ import Generation.Assembly hiding(lab)
 import Semantic.Temp
 import Liveness.Flow
 
-type LiveMap = M.Map Node (S.Set Temp)
+type LiveMap = M.Map Node (Set Temp)
 
 data IGraph = IGraph
   { graph      :: Gr Temp ()
@@ -71,17 +71,14 @@ buildLiveMaps g = recursive mempty mempty
 
 -- | does the inMap calculation once
 stepInMap :: Node -> FlowGraph -> LiveMap -> LiveMap -> LiveMap
-stepInMap node g inMap outMap = case match node g of
-  (Nothing, g) -> inMap
-  (Just (_, _, (Node _ def use _), _), g) ->
-    let out = M.findWithDefault mempty node outMap
-    in M.insert node (S.fromList use `S.union` (out S.\\ S.fromList def)) inMap
+stepInMap node g inMap outMap = M.insert node (fromList use `union` (out \\ fromList def)) inMap
+  where
+    Node _ def use _ = lab' $ context g node
+    out              = M.findWithDefault mempty node outMap
 
 -- | does the outMap calculation once
 stepOutMap :: Node -> FlowGraph -> LiveMap -> LiveMap -> LiveMap
-stepOutMap node g inMap outMap = case match node g of
-  (Nothing, g) -> inMap
-  (Just (_, _, _, succ), g) ->
-    M.insert node
-             (S.unions (fmap (\((),n) -> M.findWithDefault mempty n inMap) succ))
-             outMap
+stepOutMap node g inMap = M.insert node (unions (fmap findDef succ))
+  where
+    succ      = suc' $ context g node
+    findDef n = M.findWithDefault mempty n inMap
