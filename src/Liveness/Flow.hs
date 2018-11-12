@@ -1,9 +1,9 @@
-module Liveness.Flow (instsToGrph) where
+module Liveness.Flow (instsToGrph,FlowGraph, NodeInfo(..)) where
 
-import Data.Graph.Inductive.Graph
-import Data.Graph.Inductive.PatriciaTree
-import Data.Foldable(foldl')
-import qualified Data.Map as M
+import qualified Data.Map.Strict as M
+import           Data.Graph.Inductive.Graph
+import           Data.Graph.Inductive.PatriciaTree
+import           Data.Foldable(foldl')
 
 import Generation.Assembly
 import Semantic.Temp
@@ -19,20 +19,11 @@ data NodeInfo = Node
 
 type FlowGraph = Gr NodeInfo ()
 
-cyc3 :: Gr Char ()
-cyc3 = buildGr -- cycle of three nodes
-       [([((),3)],1, 'a', [((),2)])
-       ,([],     2, 'b', [((),3)])
-       ,([],     3, 'c', [])
-       ]
-
-snd3 (_,x,_) = x
-
 instsToGrph :: [Instr] -> FlowGraph
 instsToGrph []     = empty
-instsToGrph (i:is) = delEdge (num-1, num) g
+instsToGrph instrs = delEdge (num-1, num) g
   where
-    (num,g,_) = foldl' f (f (0, empty, mempty) i) is
+    (num,g,_) = foldl' f (0, empty, mempty) instrs
     -- the accumulator will be the node number, the flow graph,
     -- a map from labels to their nodes, note the label could possible not be in
     -- the list, as we can allocate this node before seeing the label!
@@ -44,12 +35,13 @@ instsToGrph (i:is) = delEdge (num-1, num) g
       , labMap
       )
     f (i, g, labMap) inst@(Oper asm dsts srcs (Just xs)) =
-      let newG = insNode (i, Node {inst = inst, def = dsts, use = srcs, isMove = False}) g in
-      let fn x (newI, g, labMap) = case labMap M.!? x of
-            Nothing   -> (succ newI, insEdge (i, succ newI, ()) g, labMap)
-            Just node -> (newI     , insEdge (i, node     , ()) g, labMap)
+      let newG = insNode (i, Node {inst = inst, def = dsts, use = srcs, isMove = False}) g
+          fn x (newI, g, labMap) =
+            case labMap M.!? x of
+              Nothing   -> (succ newI, insEdge (i, succ newI, ()) g, labMap)
+              Just node -> (newI     , insEdge (i, node     , ()) g, labMap)
       in
-      foldr fn (i, newG, labMap) xs
+        foldr fn (i, newG, labMap) xs
     f (i, g, labMap) inst@(Label asm lab) =
       let newNode = Node {inst = inst, def = [], use = [], isMove = False} in
       case labMap M.!? lab of
@@ -59,7 +51,7 @@ instsToGrph (i:is) = delEdge (num-1, num) g
                      )
         Just node -> ( i
                      , ([], node, newNode, [((), i)]) & (insEdge (i-1, node,()) (delEdge (i-1, i) g))
-                     , labMap -- ^ if we already have a node, unset the edge from the previous inst
+                     , labMap -- ^ if we already have a node, unset the edge from the previous instruction
                      )
     f (i, g, labMap) inst@(Move asm dst src) =
       let newNode = Node {inst = inst, def = [dst], use = [src], isMove = True} in

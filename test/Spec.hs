@@ -9,6 +9,7 @@ import Data.Graph.Inductive.Graph
 import Generation.Assembly
 import Semantic.Temp
 import Liveness.Flow
+import Liveness.Live
 
 --main :: IO ()
 main = test1 "./test/queens.tig"
@@ -19,8 +20,6 @@ test1 str = do
   baseE <- baseEmap
   exp   <- transExp baseTmap baseE x env
   return (env,exp)
-
-
 
 testGraphgen = do
   a <- newTemp
@@ -37,4 +36,15 @@ testGraphgen = do
               , Label "L2" l2
               , Oper "return c"   [] [c] Nothing
               ]
-  prettyPrint (instsToGrph insts)
+  let graph'    = instsToGrph insts
+      (ig,live) = interferenceGraph graph'
+  print "graph"
+  prettyPrint graph'
+  print "outLive"
+  print live
+  print "interference graph"
+  prettyPrint (graph ig)
+  print "moves"
+  print (moves ig)
+  print "temps to nodes"
+  print (tempToNode ig)
