@@ -27,7 +27,7 @@ testGraphgen = do
   c <- newTemp
   l1 <- newLabel
   l2 <- newLabel
-  let insts = [ Oper "a := 0" [a] [] Nothing
+  let insts = [ Oper "a := 0" [a] [] (Just [l1])
               , Label "L1" l1
               , Move "b := a + 1" b a
               , Oper "c := c + b" [c] [c,b] Nothing

@@ -1,9 +1,8 @@
-module Liveness.Live --(interferenceGraph) where
-  where
+module Liveness.Live (interferenceGraph, IGraph(..), LiveMap) where
 
 import qualified Data.Map.Strict as M
 import           Data.Set(unions, (\\), union, Set(..), fromList)
-import           Data.Maybe
+import           Data.Maybe(catMaybes)
 import           Data.Foldable(foldl')
 import           Data.Graph.Inductive.Graph
 import           Data.Graph.Inductive.PatriciaTree

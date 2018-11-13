@@ -38,10 +38,10 @@ instsToGrph instrs = delEdge (num-1, num) g
       let newG = insNode (i, Node {inst = inst, def = dsts, use = srcs, isMove = False}) g
           fn x (newI, g, labMap) =
             case labMap M.!? x of
-              Nothing   -> (succ newI, insEdge (i, succ newI, ()) g, labMap)
-              Just node -> (newI     , insEdge (i, node     , ()) g, labMap)
+              Nothing   -> (succ newI, insEdge (i, newI, ()) g, M.insert x newI labMap)
+              Just node -> (newI     , insEdge (i, node, ()) g, labMap)
       in
-        foldr fn (i, newG, labMap) xs
+        foldr fn (succ i, newG, labMap) xs
     f (i, g, labMap) inst@(Label asm lab) =
       let newNode = Node {inst = inst, def = [], use = [], isMove = False} in
       case labMap M.!? lab of
@@ -50,9 +50,9 @@ instsToGrph instrs = delEdge (num-1, num) g
                      , M.insert lab i labMap
                      )
         Just node -> ( i
-                     , ([], node, newNode, [((), i)]) & (insEdge (i-1, node,()) (delEdge (i-1, i) g))
-                     , labMap -- ^ if we already have a node, unset the edge from the previous instruction
-                     )
+                     , ([], node, newNode, [((), i)]) & g
+                     , labMap -- ^ since all blocks end with a jump, we don't have to worry about
+                     )        -- undoing the edge that comes from the last instruction!
     f (i, g, labMap) inst@(Move asm dst src) =
       let newNode = Node {inst = inst, def = [dst], use = [src], isMove = True} in
       ( succ i
