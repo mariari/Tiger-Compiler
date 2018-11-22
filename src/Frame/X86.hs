@@ -15,7 +15,9 @@ module Frame.X86
   , sp
   , rax
   , Registers
+  , Register
   , Regs
+  , Reg
   , rdx
   , exp
   , wordSize
@@ -24,6 +26,7 @@ module Frame.X86
   , procEntryExit2
   , argumentRegs
   , callerSaved
+  , registers
   ) where
 
 import Prelude hiding (exp)
@@ -39,6 +42,12 @@ import qualified IR.Tree             as Tree
 import qualified Generation.Assembly as A
 import Frame.X86Typ
 import App.Environment
+
+-- these are the registers which can be used for allocation
+registers :: (MonadReader s m, HasRegs s Registers) => m [T.Temp]
+registers = do
+  env <- ask
+  return $ fmap (\x -> view (regs . x) env) [rax, rcx, rdx, rbx, rsi, rdi, r8, r9, r10, r11, r12, r13, r14, r15]
 
 callerSaved :: (MonadReader s m, HasRegs s Registers) => m [T.Temp]
 callerSaved = do
@@ -84,11 +93,11 @@ instance I.FrameInter Frame Access where
   name = name
   newFrame label bs = do
     (formalsAlloc, formals) <- foldM allocFormal (0,[]) bs
-    return (Frame { formals       = formals
-                  , _formalsAlloc = formalsAlloc
-                  , _localsAlloc  = 0
-                  , name          = label
-                  })
+    return Frame { formals       = formals
+                 , _formalsAlloc = formalsAlloc
+                 , _localsAlloc  = 0
+                 , name          = label
+                 }
   formals = formals
   allocLocal f False = (\x -> (f, InReg x)) <$> T.newTemp
   allocLocal f True  = return (f', InFrame (f'^.localsAlloc * wordSize))

@@ -17,6 +17,8 @@ data Frame = Frame { formals       :: [Access]
                    } deriving Show
 makeLenses ''Frame
 
+type Register = T.Temp
+type Reg  = T.Temp
 type Regs = Registers
 
 data Registers = Reg

@@ -10,6 +10,7 @@ import Generation.Assembly
 import Semantic.Temp
 import Liveness.Flow
 import Liveness.Live
+import Allocation.Color
 
 --main :: IO ()
 main = test1 "./test/queens.tig"
@@ -48,3 +49,9 @@ testGraphgen = do
   print (moves ig)
   print "temps to nodes"
   print (tempToNode ig)
+  return ig
+
+testAlloc = do
+  ig  <- testGraphgen
+  env <- genEnv
+  return $ color ig mempty (const 1) env
