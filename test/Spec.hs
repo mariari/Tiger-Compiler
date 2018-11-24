@@ -11,6 +11,7 @@ import Semantic.Temp
 import Liveness.Flow
 import Liveness.Live
 import Allocation.Color
+import Frame.X86
 
 --main :: IO ()
 main = test1 "./test/queens.tig"
@@ -30,9 +31,9 @@ testGraphgen = do
   l2 <- newLabel
   let insts = [ Oper "a := 0" [a] [] (Just [l1])
               , Label "L1" l1
-              , Move "b := a + 1" b a
+              , Move "b := a"     b a
               , Oper "c := c + b" [c] [c,b] Nothing
-              , Move "a := b * 2" a b
+              , Move "a := b"     a b
               , Oper "a < N"      []  [a]   (Just [l1, l2])
               , Label "L2" l2
               , Oper "return c"   [] [c] Nothing
@@ -54,4 +55,5 @@ testGraphgen = do
 testAlloc = do
   ig  <- testGraphgen
   env <- genEnv
-  return $ color ig mempty (const 1) env
+  let initAlloc = initAllocRegs env
+  return $ color ig initAlloc (const 1) env

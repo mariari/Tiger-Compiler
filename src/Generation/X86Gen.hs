@@ -18,7 +18,7 @@ type MonadGen m = ( MonadState [Instr] m
                   )
 
 -- note for X86 we can ignore the frame!
-codegen :: (MonadReader Env m, MonadIO m) => p -> T.Stmt -> m [Instr]
+codegen :: (MonadReader Env m, MonadIO m) => F.Frame -> T.Stmt -> m [Instr]
 codegen frame stm = reverse <$> execStateT (munchStm stm) []
 
 -- Helper functions------------------------------------------------------------------

@@ -10,7 +10,7 @@ import qualified AbstractSyntax     as Absyn
 
 import           Control.Lens
 import qualified Data.Symbol     as S
-import qualified Data.Map.Strict as Map -- we are use ordering in symbols, so we can't use HashMap
+import qualified Data.Map.Strict as Map -- as symbols don't have hash, so we can't use HashMap
 
 -- Environment
 type TypeMap  = PT.SymMap PT.Type  -- for types

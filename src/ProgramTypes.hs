@@ -2,7 +2,7 @@ module ProgramTypes where
 
 import           Data.Symbol
 import           Data.IORef.Show
-import qualified Data.Map.Strict as Map -- we use Map as we need ordering on the symbols
+import qualified Data.Map.Strict as Map -- as symbols don't have hash, so we can't use HashMap
 
 type Unique = Int
 

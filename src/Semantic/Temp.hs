@@ -9,10 +9,11 @@ module Semantic.Temp
 
 import Data.Symbol as S
 import Data.Unique.Show
+import Data.Hashable
 
 -- Temp Type ----------------------------------------------------------
 
-newtype Temp = T Unique deriving (Eq,Ord)
+newtype Temp = T Unique deriving (Eq,Ord, Hashable)
 
 newTemp = T <$> newUnique
 

@@ -27,6 +27,7 @@ module Frame.X86
   , argumentRegs
   , callerSaved
   , registers
+  , initAllocRegs
   ) where
 
 import Prelude hiding (exp)
@@ -35,6 +36,7 @@ import Control.Monad(foldM)
 import System.IO.Unsafe(unsafePerformIO)
 import Data.Symbol(Symbol)
 import Control.Monad.Reader
+import qualified Data.HashMap.Strict as M
 
 import qualified Semantic.Temp       as T
 import qualified Frame.Interface     as I
@@ -48,6 +50,9 @@ registers :: (MonadReader s m, HasRegs s Registers) => m [T.Temp]
 registers = do
   env <- ask
   return $ fmap (\x -> view (regs . x) env) [rax, rcx, rdx, rbx, rsi, rdi, r8, r9, r10, r11, r12, r13, r14, r15]
+
+initAllocRegs :: (MonadReader s m, HasRegs s Registers) => m (M.HashMap T.Temp T.Temp)
+initAllocRegs = M.fromList . fmap (\x -> (x,x)) <$> registers
 
 callerSaved :: (MonadReader s m, HasRegs s Registers) => m [T.Temp]
 callerSaved = do
