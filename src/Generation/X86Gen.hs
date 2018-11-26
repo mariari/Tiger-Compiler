@@ -80,10 +80,10 @@ munchMem x e r = case x of
                  }
   _ -> do
     me <- munchExp e
-    emit $ defOp { assem = "MOVQ `d0, `s0\n"
-                 , srcs  = [me]
-                 , dsts  = [r]
-                 }
+    emit Move { assem = "MOVQ `d0, `s0\n"
+              , src  = me
+              , dst  = r
+              }
 
 -- might have missed some cases with a generic d on the lefthand side of Move
 -- | munchStm adds assembly instructions to the state as a side effect as it evaluates statements
@@ -203,7 +203,8 @@ munchExp (T.Binop e1 T.Div e2) = result $ \r -> do
   me2 <- munchExp e2
   emit $ defOp { assem = "IDIV `s0\n"
                , srcs = [me2]
-               } -- removed [env^.regs.rax, env^.regs.rdx] as it isn't used here!
+               , dsts = [env^.regs.rax, env^.regs.rdx]
+               }
   emit $ Move { assem = "MOVQ `s0, `d0\n"
               , dst   = r
               , src   = env^.regs.rax
@@ -228,7 +229,7 @@ munchExp (T.Call (T.Name l) args) = result $ \r -> do
   -- only happens when argsOverFlow > 0
   traverse (\a -> emit defOp {assem = "PUSHQ `s0\n", srcs = [a]})
            (take argsOverFlow mArgs)
-  zipWithM (\a r -> emit  Move {assem = "MOVQ `s0, `d0", src = a, dst = r})
+  zipWithM (\a r -> emit  Move {assem = "MOVQ `s0, `d0\n", src = a, dst = r})
            (drop argsOverFlow mArgs)
            argRegs
   callerS <- callerSaved

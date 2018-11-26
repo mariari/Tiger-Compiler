@@ -1,18 +1,52 @@
 module Main where
 
-import Semantic.Analysis
 import TigerParser
+import Semantic.Analysis
 import App.Initialize
 import App.Environment
 import Semantic.Environment
 import Semantic.Escape
-import Semantic.Translate
 import Semantic.Fragment
+import Semantic.Temp(Temp)
 import IR.Canonical
+import qualified Allocation.RegAlloc  as RegAlloc
+import qualified Frame.CurrentMachine as Frame
+import qualified Generation.X86Gen    as X86
+import qualified Generation.Assembly  as Assembly
+
+import Data.Foldable(traverse_)
+import Data.Maybe(fromMaybe)
+import Data.HashMap.Strict as M
+import Control.Monad.Reader hiding (sequence)
 import Data.IORef
+import System.IO
 
 main :: IO ()
-main = test1 "./test/merge.tig" >>= print
+main = test2 >> return ()
+
+tempName :: HasRegs s Frame.Registers => HashMap Temp Frame.Register -> s -> Temp -> String
+tempName alloc env temp = Frame.sayName (fromMaybe temp (M.lookup temp alloc)) env
+
+emitproc out (Str labl str) = liftIO $ appendFile out (Frame.string labl str <> "\n")
+emitproc out (Proc {body = body, f = frame}) = do
+  stmts            <- liftIO $ linearize body >>= basicBlocks >>= traceSchedule
+  instrs           <- concat <$> traverse (X86.codegen frame) stmts
+  instrs2          <- Frame.procEntryExit2 frame instrs
+  (instrs3, alloc) <- RegAlloc.alloc instrs2 frame
+  env              <- ask
+  let formatInst    = Assembly.format (tempName alloc env)
+  -- add call to procEntryExit3, will give prologue, body, and epilogue
+  -- debugging information for now
+  liftIO $ print "statements: "
+  liftIO $ traverse print stmts
+  liftIO $ print "instructions: "
+  liftIO $ traverse print instrs
+  liftIO $ print "alloc: "
+  liftIO $ print alloc
+  liftIO $ print "regmap: "
+  liftIO $ print (Frame.regmap env)
+
+  liftIO $ traverse_ (appendFile out . formatInst) instrs3
 
 test1 :: FilePath -> IO (Env, [Frag])
 test1 str = do
@@ -20,10 +54,9 @@ test1 str = do
   traverseExp (mempty,0) x
   env   <- genEnv -- keep this around after running exp
   baseE <- baseEmap
-  exp   <- transExp baseTmap baseE x env
-  return (env,exp)
+  frags <- transExp baseTmap baseE x env
+  return (env,frags)
 
 test2 = do
-  (env,Expty {_expr = exp}) <- test1 "./test/queens.tig"
-  x <- unNx exp
-  linearize x >>= basicBlocks >>= traceSchedule
+  (env,frags) <- test1 "./test/queens.tig"
+  traverse (\frag -> runReaderT (emitproc "./compiled.asm" frag) env) frags

@@ -28,6 +28,9 @@ module Frame.X86
   , callerSaved
   , registers
   , initAllocRegs
+  , string
+  , sayName
+  , regmap
   ) where
 
 import Prelude hiding (exp)
@@ -45,6 +48,26 @@ import qualified Generation.Assembly as A
 import Frame.X86Typ
 import App.Environment
 
+regmap :: (HasRegs s Registers, MonadReader s m) => m (M.HashMap T.Temp String)
+regmap = do
+  regs <- view regs <$> ask
+  return $ M.fromList [ (regs^.fp,  "fp")
+                      , (regs^.rax, "rax")
+                      , (regs^.rcx, "rcx")
+                      , (regs^.rbx, "rbx")
+                      , (regs^.rdx, "rdx")
+                      , (regs^.rsi, "rsi")
+                      , (regs^.rdi, "rdi")
+                      , (regs^.sp,  "sp")
+                      , (regs^.r8,  "r8")
+                      , (regs^.r9,  "r9")
+                      , (regs^.r10, "r10")
+                      , (regs^.r11, "r11")
+                      , (regs^.r12, "r12")
+                      , (regs^.r13, "r13")
+                      , (regs^.r14, "r14")
+                      , (regs^.r15, "r15")
+                      ]
 -- these are the registers which can be used for allocation
 registers :: (MonadReader s m, HasRegs s Registers) => m [T.Temp]
 registers = do
@@ -84,6 +107,16 @@ exp (InReg register) _ = Tree.Temp register
 externalCall :: Symbol -> [Tree.Exp] -> Tree.Exp
 externalCall name args = Tree.Call (Tree.Name (T.nameLabel name)) args
 
+string :: T.Label -> String -> String
+string lab str = show lab <> ": db " <> show str
+
+sayName :: (HasRegs s Registers, MonadReader s m) => T.Temp -> m String
+sayName temp = do
+  regMap <- regmap
+  case M.lookup temp regMap of
+    Just reg -> return reg
+    Nothing  -> return (show temp)
+
 -- fix up later
 procEntryExit1 _ body = body
 
@@ -91,7 +124,7 @@ procEntryExit1 _ body = body
 procEntryExit2 f body = do
   env        <- ask
   caleesaved <- callerSaved
-  return A.Oper {A.assem = "", A.dsts = [], A.srcs = env^.regs.rv : caleesaved, A.jump = Just []}
+  return (body <> [A.Oper {A.assem = "", A.dsts = [], A.srcs = env^.regs.rv : caleesaved, A.jump = Just []}])
 --  T.new
 
 instance I.FrameInter Frame Access where

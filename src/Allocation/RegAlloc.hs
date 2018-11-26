@@ -31,8 +31,9 @@ alloc instrs frame = do
   initRegMap       <- initAllocRegs
   (allocs, spills) <- color igraph initRegMap spillCost
 
-  let isRedundant (Move {dst, src}) = allocs M.! dst == allocs M.! src
-      isRedundant _                 = False
+  let isRedundant (Move {dst, src}) =
+        M.lookup dst allocs == M.lookup src allocs
+      isRedundant _           = False
   if null spills
     then return (filter (not . isRedundant) instrs, allocs)
     else error "error in alloc, spilling isn't implemented yet!"
