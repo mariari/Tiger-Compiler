@@ -37,16 +37,16 @@ emitproc out (Proc {body = body, f = frame}) = do
   let formatInst    = Assembly.format (tempName alloc env)
   -- add call to procEntryExit3, will give prologue, body, and epilogue
   -- debugging information for now
-  liftIO $ print "statements: "
-  liftIO $ traverse print stmts
-  liftIO $ print "instructions: "
-  liftIO $ traverse print instrs
-  liftIO $ print "alloc: "
-  liftIO $ print alloc
-  liftIO $ print "regmap: "
-  liftIO $ print (Frame.regmap env)
-
-  liftIO $ traverse_ (appendFile out . formatInst) instrs3
+  liftIO $ do
+    print "statements: "
+    traverse print stmts
+    print "instructions: "
+    traverse print instrs
+    print "alloc: "
+    print alloc
+    print "regmap: "
+    print (Frame.regmap env)
+    traverse_ (appendFile out . formatInst) instrs3
 
 test1 :: FilePath -> IO (Env, [Frag])
 test1 str = do
@@ -55,6 +55,8 @@ test1 str = do
   env   <- genEnv -- keep this around after running exp
   baseE <- baseEmap
   frags <- transExp baseTmap baseE x env
+  print x
+  print frags
   return (env,frags)
 
 test2 = do

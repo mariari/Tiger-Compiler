@@ -174,8 +174,7 @@ munchExp (T.Const c)  = result $ \r ->
              }
 munchExp (T.Name l) = result $ \r ->
   emit $ defOp { assem = "LEA `d0 [" <> show l <> "]\n"
-               , dsts  = [r]
-               , jump  = Just [l]
+               , dsts  = [r] -- there is no jump, the label is something given
                }
 munchExp (T.Neg (T.Const c)) = result $ \r -> do
   emit $ defOp { assem = "MOVQ `d0, " <> show c <> "\n"

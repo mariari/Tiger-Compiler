@@ -172,7 +172,7 @@ transExp' exData (Absyn.Funcall fnSym args pos) = do
                              return _expr)
                 args
                 _formals
-      _expr <- T.funcall _label _level expArgs (exData^.level)
+      _expr <- T.funcall fnSym _label _level expArgs (exData^.level)
       return (Expty {_expr, _typ = _result})
 
 transExp' exData (Absyn.Assign var toPutE pos) = do

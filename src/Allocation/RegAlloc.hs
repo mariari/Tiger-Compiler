@@ -27,7 +27,6 @@ alloc instrs frame = do
           f n (_, _, Node {def, use}, _) = (inUseSum n use + inUseSum n def +)
           inUseSum x xs | x `elem` xs = 1
                         | otherwise   = 0
-
   initRegMap       <- initAllocRegs
   (allocs, spills) <- color igraph initRegMap spillCost
 

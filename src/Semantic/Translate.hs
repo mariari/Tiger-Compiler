@@ -316,19 +316,18 @@ sequence xs = do
     Cx c -> return . Cx $ \t f -> Tree.Seq (exSeq unInit) (c t f)
 
 funcall :: (EnvHasRegs env m, MonadIO m, MonadError String m)
-        => Temp.Label -> Level -> [Exp] -> Level -> m Exp
-funcall labelF TopLevel args currentLvl = do
-  unArgs <- liftIO (traverse unEx args)
-  return . Ex $ F.externalCall (Temp.fromLabel labelF) unArgs
-funcall labelF levelF args currentLvl = do
-  unArgs <- liftIO (traverse unEx args)
+        => Symbol -> Temp.Label -> Level -> [Exp] -> Level -> m Exp
+funcall fnSym labelF TopLevel args currentLvl =
+  Ex . F.externalCall fnSym <$> liftIO (traverse unEx args)
+funcall _ labelF levelF args currentLvl =
   case _parent levelF of
-    TopLevel -> return . Ex $ F.externalCall (Temp.fromLabel labelF) unArgs
+    TopLevel ->
+      Ex . F.externalCall (Temp.fromLabel labelF) <$> liftIO (traverse unEx args)
     Level {} -> do
-      link   <- staticLink currentLvl (_parent levelF)
-      return . Ex
-             . Tree.Call (Tree.Name labelF)
-             $ link : unArgs
+      (\ args -> Ex . Tree.Call (Tree.Name labelF) . (: args))
+        <$> liftIO (traverse unEx args)
+        <*> staticLink currentLvl (_parent levelF)
+
 
 letExp :: [Exp] -> [Exp] -> IO Exp
 letExp [] []     = return $ Nx (Tree.Exp (Tree.Const 0))
