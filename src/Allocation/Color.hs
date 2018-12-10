@@ -7,8 +7,8 @@ import           Data.Graph.Inductive.PatriciaTree
 import           Data.Graph.Inductive.Graph
 import           Control.Monad.Reader
 import           Data.List(sortOn, foldl')
-import           Data.Maybe(catMaybes)
-import           Control.Arrow((&&&))
+import           Data.Maybe(catMaybes, isJust)
+import           Control.Arrow((&&&), (***), second)
 
 import Liveness.Live
 import Semantic.Temp
@@ -24,6 +24,11 @@ color (IGraph graph tempToNode _) initAlloc spillCost = do
   regs <- registers
   let k      = length regs
       regSet = S.fromList regs
+      initMap = M.fromList
+              . fmap (second fromJust)
+              . filter (isJust . snd)
+              . map (id &&& (`M.lookup` initAlloc) . fromJust . lab graph)
+              $ nodes graph
       simplify :: Gr a b -> (Gr a b, [Node])
       simplify g = ((`delNodes` g) &&& id)
                  . fmap fst
@@ -42,24 +47,26 @@ color (IGraph graph tempToNode _) initAlloc spillCost = do
           (g', nodes)    = simplify g
           (g'', spilled) = minSpill g' -- for the g == g' case
           f              = foldl' (\ (a,s) n -> selectRegister graph regSet n a s)
-      (allocs, spills) = (loop graph M.empty [] [])
-  return (allocHashMapToTemp graph allocs, (isJust . lab graph <$> spills))
+      (allocs, spills) = (loop graph initMap [] [])
+  return (allocHashMapToTemp graph allocs, (fromJust . lab graph <$> spills))
 
 -- | allocHashMapTotemp turns a map of nodes as keys to a map of Temps as keys
 allocHashMapToTemp :: (Eq k, Hashable k, Graph gr) => gr k b -> M.HashMap Node v -> M.HashMap k v
-allocHashMapToTemp graph = mapKeys (isJust . lab graph)
+allocHashMapToTemp graph = mapKeys (fromJust . lab graph)
 
-isJust (Just x) = x
-isJust Nothing  = error "an allocated variable is not in the interference map!"
+fromJust (Just x) = x
+fromJust Nothing  = error "an allocated variable is not in the interference map!"
 
 -- | Select register allocates a node to the allocHashMap or adds it to the spillCost
 -- Note that it should never spill unless we send in a potential spill node!
 selectRegister :: Ord a => Gr c b -> S.Set a -> Node -> M.HashMap Node a -> [Node] -> (M.HashMap Node a, [Node])
-selectRegister graph regSet node allocHashMap spillXs =
-  let takenColors = catMaybes ((`M.lookup` allocHashMap) <$> neighbors graph node) in
-  case fasterDifference regSet takenColors of
-    []    -> (allocHashMap, node : spillXs)
-    (x:_) -> (M.insert node x allocHashMap, spillXs)
+selectRegister graph regSet node allocHashMap spillXs
+  | M.member node allocHashMap = (allocHashMap, spillXs)
+  | otherwise =
+    let takenColors = catMaybes ((`M.lookup` allocHashMap) <$> neighbors graph node) in
+    case fasterDifference regSet takenColors of
+      []    -> (allocHashMap, node : spillXs)
+      (x:_) -> (M.insert node x allocHashMap, spillXs)
 
 -- | this is a set difference that converts the output back into a list
 fasterDifference :: Ord a => S.Set a -> [a] -> [a]

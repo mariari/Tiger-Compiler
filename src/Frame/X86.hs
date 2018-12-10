@@ -118,7 +118,22 @@ sayName temp = do
     Nothing  -> return (show temp)
 
 -- fix up later
-procEntryExit1 _ body = body
+procEntryExit1 Frame {formals = []} body = return body
+procEntryExit1 Frame {formals} body = do
+  argRegs <- argumentRegs
+  fp      <- view (regs . fp) <$> ask
+  let tempFp  = Tree.Temp fp
+      numRegs = length argRegs -- This allows me to dispatch if Ι already allocated to it
+      zipFn f i r
+        | i  > numRegs = Tree.Move (exp f tempFp) -- case that we've already alloc all the register
+                       . exp (InFrame (2 * wordSize + (i - numRegs) * wordSize))
+                       $ tempFp
+        | otherwise    = Tree.Move (exp f tempFp)
+                       $ Tree.Temp r
+      moves = foldr1 Tree.Seq
+            $ zipWith3 zipFn
+                       formals [1..] (cycle argRegs)
+  return (Tree.Seq moves body)
 
 -- A very bare bones version of procEntryexit2
 procEntryExit2 f body = do
