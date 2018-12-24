@@ -24,6 +24,7 @@ module Frame.X86
   , externalCall
   , procEntryExit1
   , procEntryExit2
+  , procEntryExit3
   , argumentRegs
   , callerSaved
   , registers
@@ -117,7 +118,6 @@ sayName temp = do
     Just reg -> return reg
     Nothing  -> return (show temp)
 
--- fix up later
 procEntryExit1 Frame {formals = []} body = return body
 procEntryExit1 Frame {formals} body = do
   argRegs <- argumentRegs
@@ -141,6 +141,8 @@ procEntryExit2 f body = do
   caleesaved <- callerSaved
   return (body <> [A.Oper {A.assem = "", A.dsts = [], A.srcs = env^.regs.rv : caleesaved, A.jump = Just []}])
 --  T.new
+
+procEntryExit3 f body = undefined
 
 instance I.FrameInter Frame Access where
   name = name

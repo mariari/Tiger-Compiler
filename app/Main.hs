@@ -51,7 +51,7 @@ emitproc out (Proc {body = body, f = frame}) = do
 test1 :: FilePath -> IO (Env, [Frag])
 test1 str = do
   Right x <- parseTigerFile str
-  traverseExp (mempty,0) x
+  escape x
   env   <- genEnv -- keep this around after running exp
   baseE <- baseEmap
   frags <- transExp baseTmap baseE x env

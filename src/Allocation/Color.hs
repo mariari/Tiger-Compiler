@@ -8,7 +8,7 @@ import           Data.Graph.Inductive.Graph
 import           Control.Monad.Reader
 import           Data.List(sortOn, foldl')
 import           Data.Maybe(catMaybes, isJust)
-import           Control.Arrow((&&&), (***), second)
+import           Control.Arrow((&&&), second)
 
 import Liveness.Live
 import Semantic.Temp

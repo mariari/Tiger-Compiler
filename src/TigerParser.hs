@@ -6,17 +6,13 @@ import           Data.Monoid
 import           Text.ParserCombinators.Parsec.Language
 import           Control.Monad.Trans (lift)
 import           Control.Monad.Identity
-import qualified Data.IORef                          as Ref
 import qualified Text.ParserCombinators.Parsec.Token as T
 import           Text.Parsec.Expr                    as E
 import qualified Data.Symbol                         as S
 
 import AbstractSyntax
 
--- Need IORefs so I can't use emptyDef
-type ParserIO x = ParsecT String () IO x
-
-langaugeDef :: GenLanguageDef String u IO
+langaugeDef :: GenLanguageDef String u Identity
 langaugeDef = LanguageDef
               { T.reservedNames   = ["array", "if", "then", "else"
                                     ,"while", "for", "to", "do", "let"
@@ -38,7 +34,7 @@ langaugeDef = LanguageDef
               , commentLine       = ""
               }
 
-lexer :: T.GenTokenParser String u IO
+lexer :: T.GenTokenParser String u Identity
 lexer = T.makeTokenParser langaugeDef
 
 -- could make these
@@ -60,23 +56,23 @@ sourceLineCol source = (sourceLine source, sourceColumn source)
 
 getLineCol = fmap sourceLineCol getPosition
 
-symbol :: ParserIO S.Symbol
+symbol :: Parser S.Symbol
 symbol = S.intern <$> identifier
 
 parseTigerLine = parseTigerLine' ""
 
-parseTigerLine' = runParserT (whiteSpace >> expression) ()
+parseTigerLine' = runParser (whiteSpace >> expression') ()
 
+parseTigerFile :: FilePath -> IO (Either ParseError ExpI)
 parseTigerFile fname = do
   input <- readFile fname
-  parseTigerLine' fname input
+  return $ parseTigerLine' fname input
 
-
-expression :: ParserIO Exp
+expression :: Parser ExpI
 expression = buildExpressionParser optable expression' <?> "Exp"
 
-expression' ::  ParserIO Exp
-expression' =  seq'
+expression' ::  Parser ExpI
+expression' = seq'
            <|> (ifThen <?> "if then")
            <|> for
            <|> while
@@ -88,30 +84,31 @@ expression' =  seq'
            <|> try recCreate
            <|> try funcall
            <|> try assign
-           <|> try lvalue
+           <|> lvalue
            <|> stringLit
            <|> intLit
 
-dec :: ParserIO Dec
+dec :: Parser (Dec Identity)
 dec =  tydec
    <|> vardec
    <|> fundec
    <?> "declaration"
 
-tyP :: ParserIO Ty
+tyP :: Parser (Ty Identity)
 tyP =  arrty
    <|> recty
    <|> namety
    <?> "type creation"
 
--- Exp------------------------------------------------------
+-- ExpI------------------------------------------------------
 
+seq' :: Parser ExpI
 seq' = do
   pos <- getLineCol
   seq <- parens (expression `sepBy` semi)
   return $ Sequence seq pos
 
-ifThen :: ParserIO Exp
+ifThen :: Parser ExpI
 ifThen = do
   pos <- getLineCol
   reserved "if"
@@ -123,7 +120,7 @@ ifThen = do
     Just x  -> return $ IfThenElse pred then' x pos
     Nothing -> return $ IfThen     pred then'   pos
 
-for :: ParserIO Exp
+for :: Parser ExpI
 for = do
   pos <- getLineCol
   reserved "for"
@@ -134,9 +131,10 @@ for = do
   end <- expression
   reserved "do"
   run <- expression
-  esc <- lift (Ref.newIORef True)
+  let esc = Identity True
   return $ For var esc from end run pos
 
+while :: Parser ExpI
 while = do
   pos <- getLineCol
   reserved "while"
@@ -145,11 +143,12 @@ while = do
   run <- expression
   return $ While pred run pos
 
+assign :: Parser ExpI
 assign = do
   pos <- getLineCol
-  lvalue <- lvalueParserIO
+  lvalue <- lvalueParser
   reservedOp ":="
-  exp <- expression
+  exp <- expression'
   return $ Assign lvalue exp pos
 
 negation = do
@@ -187,7 +186,7 @@ recCreate = do
   fields <- braces (field' `sepBy` comma)
   return $ RecCreate tyid fields pos
 
-field' :: ParserIO Field
+field' :: Parser (Field Identity)
 field' = do
   pos <- getLineCol
   id' <- symbol
@@ -205,7 +204,7 @@ intLit = do
 
 -- Haskells string has the same escape characters I think!
 
-stringLit :: ParserIO Exp
+stringLit :: Parser ExpI
 stringLit = do
   pos <- getLineCol
   char '"'
@@ -223,31 +222,32 @@ leftRec p op = p >>= rest
   where
     rest x = (op >>= rest . ($ x)) <|> return x
 
-lvalue = Var <$> lvalueParserIO
+lvalue :: Parser ExpI
+lvalue = Var <$> lvalueParser
 
-lvalueParserIO :: ParserIO Var
-lvalueParserIO = leftRec idParserIO (fieldExp <|> subscript)
+lvalueParser :: Parser (Var Identity)
+lvalueParser = leftRec idParser (fieldExpI <|> subscript)
   where
-    idParserIO = do
+    idParser = do
       pos <- getLineCol
       id' <- identifier
       return $ SimpleVar (S.intern id') pos
 
-fieldExp :: ParserIO (Var -> Var)
-fieldExp = do
+fieldExpI :: Parser (Var Identity -> Var Identity)
+fieldExpI = do
   pos <- getLineCol
   reservedOp "."
   a <- identifier
   return $ (\l -> FieldVar l (S.intern a) pos)
 
-subscript :: ParserIO (Var -> Var)
+subscript :: Parser (Var Identity -> Var Identity)
 subscript = do
   pos <- getLineCol
   e <- brackets expression
   return (\l -> Subscript l e pos)
 
 -- Typ----------------------------------------------------------------------
-arrty :: ParserIO Ty
+arrty :: Parser (Ty Identity)
 arrty = do
   pos <- getLineCol
   reserved "array"
@@ -263,16 +263,16 @@ namety = do
   return $ NameTy id' pos
 
 -- Declarations--------------------------------------------------------------
-fieldDec :: ParserIO FieldDec
+fieldDec :: Parser (FieldDec Identity)
 fieldDec = do
   pos <- getLineCol
   id' <- symbol
   reservedOp ":"
   typid  <- symbol
-  escape <- lift (Ref.newIORef True)
+  let escape = Identity True
   return $ FieldDec id' escape typid pos -- Escape is set to true by default
 
-tydec :: ParserIO Dec
+tydec :: Parser (Dec Identity)
 tydec = do
   pos <- getLineCol
   reserved "type"
@@ -281,7 +281,7 @@ tydec = do
   ty <- tyP
   return $ TypeDec typid ty pos
 
-fundec :: ParserIO Dec
+fundec :: Parser (Dec Identity)
 fundec = do
   pos <- getLineCol
   reserved "function"
@@ -293,7 +293,7 @@ fundec = do
   exp <- expression
   return $ FunDec id' fields mtypid exp pos
 
-vardec :: ParserIO Dec
+vardec :: Parser (Dec Identity)
 vardec = do
   pos <- getLineCol
   reserved "var"
@@ -302,17 +302,17 @@ vardec = do
   mtypid <- optionMaybe symbol
   reservedOp ":="
   exp <- expression
-  esc <- lift (Ref.newIORef True)
+  let esc = Identity True
   return $ VarDec id' esc mtypid exp pos
 
--- Exp parser for numbers
+-- ExpI parser for numbers
 
 infixOp op pos exp1 exp2 = Infix' exp1 op exp2 pos
 
-createInfix :: String -> Op -> ParserIO (Exp -> Exp -> Exp)
+createInfix :: String -> Op -> Parser (ExpI -> ExpI -> ExpI)
 createInfix opStr term = (getLineCol >>= return . infixOp term) <* reservedOp opStr
 
-listToChoice :: [(String, Op)] -> ParserIO (Exp -> Exp -> Exp)
+listToChoice :: [(String, Op)] -> Parser (ExpI -> ExpI -> ExpI)
 listToChoice = choice . fmap (uncurry createInfix)
 
 createOpTable term = Infix term AssocLeft

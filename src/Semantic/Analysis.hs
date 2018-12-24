@@ -23,6 +23,7 @@ import qualified Data.Set        as Set
 import           Control.Monad.State.Lazy
 import           Control.Monad.Reader
 import           Control.Monad.Except
+import           Control.Monad.Identity
 import           Data.Foldable (traverse_)
 
 type RefMap = Map.Map S.Symbol (Ref.IORef (Maybe PT.Type))
@@ -74,7 +75,7 @@ runMonadTran :: Env.TypeMap
 runMonadTran tm em env f = runReaderT (runExceptT (runStateT f trans)) env
   where trans = Trans {_tm = tm, _em = em, _uniq = 0}
 
-transExp :: Env.TypeMap -> Env.EntryMap -> Absyn.Exp -> Env -> IO [F.Frag]
+transExp :: Env.TypeMap -> Env.EntryMap -> Absyn.ExpI -> Env -> IO [F.Frag]
 transExp tm em absyn env = do
   mainLevel <- T.mainLevel
   x <- runMonadTran tm em env (transExp' (Ex {_inLoop = Nothing, _level = mainLevel}) absyn)
@@ -84,7 +85,7 @@ transExp tm em absyn env = do
       runExceptT (runReaderT (T.procEntryExit mainLevel (expt^.expr)) env)
       Ref.readIORef (env^.frag)
 
-transExp' :: MonadTran m => ExtraData -> Absyn.Exp -> m Expty
+transExp' :: MonadTran m => ExtraData -> Absyn.ExpI -> m Expty
 transExp' _ (Absyn.IntLit x _)    = return (Expty {_expr = T.intLit x, _typ = PT.INT})
 transExp' _ (Absyn.Nil _)         = return (Expty {_expr = T.nil, _typ = PT.NIL})
 transExp' _ (Absyn.StringLit s _) = (\s -> Expty {_expr = s, _typ = PT.STRING}) <$> T.stringLit s
@@ -238,7 +239,7 @@ transExp' exData (Absyn.Let decs exps pos) = do
       _expr <- liftIO (T.letExp expDecs (fmap (view expr) expsTyped))
       return $ set expr _expr (last expsTyped)
 
-transVar :: MonadTran m => ExtraData -> Absyn.Var -> m VarTy
+transVar :: MonadTran m => ExtraData -> Absyn.Var Identity -> m VarTy
 transVar exData (Absyn.SimpleVar sym pos) = do
   let err str = throwError (show pos <> " " <> S.unintern sym <> str)
   Trans {_em = envMap} <- get
@@ -278,7 +279,7 @@ transVar exData (Absyn.FieldVar recordType field pos) = do
         Nothing ->
           throwError (show pos <> " Field in " <> S.unintern field <> "Record does not exist")
 
-transTy :: MonadTran m => RefMap -> Absyn.Ty -> m (PT.Type, RefMap)
+transTy :: MonadTran m => RefMap -> Absyn.Ty Identity -> m (PT.Type, RefMap)
 transTy refMap (Absyn.NameTy sym pos) = do
   (refType, refMap) <- getOrCreateRefMap refMap sym
   return (PT.NAME sym refType, refMap)
@@ -298,7 +299,7 @@ transTy refMap (Absyn.RecordTy recs) = do
   unique <- fresh
   return (PT.RECORD (reverse xs) unique, refMap)
 
-transDec :: MonadTran m => ExtraData -> [Absyn.Dec] -> Absyn.Pos -> m [T.Exp]
+transDec :: MonadTran m => ExtraData -> [Absyn.Dec Identity] -> Absyn.Pos -> m [T.Exp]
 transDec exData decs pos = do
   _  <- transTypeDecs     exData typeDecs pos
   _  <- transFunDecsHead  exData funDecs  pos
@@ -336,7 +337,7 @@ transVarDecs exData decs pos = traverse f decs
               newMap
     f _ = throwError (show pos <> " violated precondition ")
 
-transFunDecsHead :: (MonadTran m, Traversable t, Show a) => ExtraData -> t Absyn.Dec -> a -> m ()
+transFunDecsHead :: (MonadTran m, Traversable t, Show a) => ExtraData -> t (Absyn.Dec Identity) -> a -> m ()
 transFunDecsHead exData decs pos = traverse_ f decs
   where
     f (Absyn.FunDec name fields mtype body pos) = do
@@ -344,7 +345,7 @@ transFunDecsHead exData decs pos = traverse_ f decs
       types <- traverse (mapFieldDec (\_ x _ -> x)) fields
       let putIn x = do
             label   <- liftIO Temp.newLabel
-            escapes <- liftIO $ traverse (\(Absyn.FieldDec _ esc _ _) -> Ref.readIORef esc) fields
+            let escapes = map (\(Absyn.FieldDec _ (Identity esc) _ _) -> esc) fields
             lvl     <- liftIO $ T.newLevel (exData^.level) label escapes
             modify (over em (Map.insert name (Env.FunEntry types x lvl label)))
       case mtype of
@@ -357,7 +358,7 @@ transFunDecsHead exData decs pos = traverse_ f decs
               putIn actualTy
     f _ = throwError (show pos <> " internal precondition violated at transFunDecHead")
 
-transFunDecsBody :: (MonadTran m, Traversable t, Show a) => ExtraData -> t Absyn.Dec -> a -> m ()
+transFunDecsBody :: (MonadTran m, Traversable t, Show a) => ExtraData -> t (Absyn.Dec Identity) -> a -> m ()
 transFunDecsBody exData decs pos = traverse_ f decs
   where
     f (Absyn.FunDec name fields mtype body pos) = do
@@ -385,7 +386,7 @@ allocFields exData fields = do
       (exData', name, var) <- mapFieldDecImp (makeVar exData) field
       return (exData', (name, var) : vars)
 
-transTypeDecs :: MonadTran m => ExtraData -> [Absyn.Dec] -> Absyn.Pos -> m ()
+transTypeDecs :: MonadTran m => ExtraData -> [Absyn.Dec Identity] -> Absyn.Pos -> m ()
 transTypeDecs exData decs pos = foldM handle1 refMap decs >>= allDefined >> handleCycles decs pos
   where
     refMap :: RefMap
@@ -408,14 +409,14 @@ transTypeDecs exData decs pos = foldM handle1 refMap decs >>= allDefined >> hand
         Nothing -> throwError (show pos <> " not all type variables are defined")
         Just x  -> return x
 
-writeWithRef :: MonadTran m => Ref.IORef (Maybe PT.Type) -> S.Symbol -> Absyn.Ty -> RefMap -> m RefMap
+writeWithRef :: MonadTran m => Ref.IORef (Maybe PT.Type) -> S.Symbol -> Absyn.Ty Identity -> RefMap -> m RefMap
 writeWithRef symRef sym ty refMap = do
   (tType, nRefMap) <- transTy (Map.insert sym symRef refMap) ty
   liftIO (Ref.writeIORef symRef (Just tType))
   insertType sym tType
   return nRefMap
 
-handleCycles :: MonadTran m => [Absyn.Dec] -> Absyn.Pos -> m ()
+handleCycles :: MonadTran m => [Absyn.Dec Identity] -> Absyn.Pos -> m ()
 handleCycles decs pos = foldM (recurse Set.empty) varSet varSet >> return ()
   where
     varSet = foldr f mempty decs
@@ -434,9 +435,9 @@ insertType sym tp = modify (over tm (Map.insert sym tp))
 
 -- Helper functions----------------------------------------------------------------------------
 
-allocLocal :: (MonadIO m, MonadError String m) => ExtraData -> Ref.IORef Bool -> m (ExtraData,T.Access)
-allocLocal (Ex inLoop level) escRef = do
-  esc <- liftIO (Ref.readIORef escRef)
+allocLocal :: (MonadIO m, MonadError String m) => ExtraData -> Identity Bool -> m (ExtraData, T.Access)
+allocLocal (Ex inLoop level) escI = do
+  let Identity esc = escI
   (level', access)<- T.allocLocal level esc
   return (Ex inLoop level', access)
 
@@ -483,9 +484,9 @@ changeEnvValue symb (Just val) = modify (over em (Map.insert symb val))
 handleInfixExp :: MonadTran m
                => (Expty -> Absyn.Pos -> m ()) -- A function like checkInt
                -> ExtraData                    -- loop and level information
-               -> Absyn.Exp                    -- left side of infix
+               -> Absyn.ExpI                   -- left side of infix
                -> Absyn.Op                     -- operation
-               -> Absyn.Exp                    -- right side of infix
+               -> Absyn.ExpI                   -- right side of infix
                -> Absyn.Pos                    -- the Posiiton
                -> m Expty
 handleInfixExp f inLoop left op right pos = do
@@ -497,7 +498,7 @@ handleInfixExp f inLoop left op right pos = do
   return (Expty {_expr, _typ = PT.INT})
 
 -- will become deprecated once we handle the intermediate stage
-handleInfixSame :: MonadTran m => ExtraData -> Absyn.Exp -> Absyn.Op -> Absyn.Exp -> Absyn.Pos -> m Expty
+handleInfixSame :: MonadTran m => ExtraData -> Absyn.ExpI -> Absyn.Op -> Absyn.ExpI -> Absyn.Pos -> m Expty
 handleInfixSame inLoop left op right pos = do
   left'  <- transExp' inLoop left
   right' <- transExp' inLoop right
@@ -506,7 +507,7 @@ handleInfixSame inLoop left op right pos = do
   return (Expty {_expr, _typ = PT.INT})
 
 handleInfixInt, handleInfixStrInt, handleInfixStr
-  :: MonadTran m => ExtraData -> Absyn.Exp -> Absyn.Op -> Absyn.Exp -> Absyn.Pos -> m Expty
+  :: MonadTran m => ExtraData -> Absyn.ExpI -> Absyn.Op -> Absyn.ExpI -> Absyn.Pos -> m Expty
 handleInfixInt    = handleInfixExp checkInt
 handleInfixStr    = handleInfixExp checkStr
 handleInfixStrInt = handleInfixExp checkStrInt
@@ -557,7 +558,7 @@ checkSameTyp x y pos
   |  x == y   = return ()
   | otherwise = throwError (show pos <> " given a " <> show x <> " needs to be the same type as " <> show y)
 
-isTypeDec :: Absyn.Dec -> Bool
+isTypeDec :: Absyn.Dec Identity -> Bool
 isTypeDec (Absyn.TypeDec {}) = True
 isTypeDec _                  = False
 
